@@ -1,0 +1,13 @@
+[package]
+name = "wacom-steer"
+version = "0.1.0"
+edition = "2021"
+description = "Wacom pen steering bridge for TrackMania Nations Forever"
+license = "MIT"
+readme = "README.md"
+
+[[bin]]
+name = "wacom-steer"
+path = "src/main.rs"
+
+[dependencies]
