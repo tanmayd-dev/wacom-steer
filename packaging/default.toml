@@ -1,0 +1,23 @@
+# Default configuration for wacom-steer
+# Copy or symlink to ~/.config/wacom-steer/config.toml
+
+# Device matching parameters
+device_name = "Wacom"
+vendor = "056a"
+product = "0375"
+
+# Steering mapping parameters
+center = 0.5
+half_span = 0.5
+deadzone = 0.0
+curve = 1.0
+invert = false
+
+# Pen lift behavior: "center" (default) or "hold"
+lift = "center"
+
+# Logging verbosity: "trace", "debug", "info" (default), "warn", "error"
+log_level = "info"
+
+# Dry run / probe mode: when true, inspect device but do not create virtual gamepad
+dry_run = false
