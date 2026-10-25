@@ -1,0 +1,14 @@
+pkgbase = wacom-steer
+	pkgdesc = Wacom pen steering and analog gamepad input bridge for Linux
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/tanmayd-dev/wacom-steer
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	depends = gcc-libs
+	depends = glibc
+	source = wacom-steer-0.1.0.tar.gz::https://github.com/tanmayd-dev/wacom-steer/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = wacom-steer
