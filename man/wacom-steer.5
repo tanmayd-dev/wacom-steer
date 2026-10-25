@@ -1,0 +1,133 @@
+.TH WACOM-STEER 5 "October 2026" "wacom-steer 0.1.0" "File Formats Manual"
+.SH NAME
+config.toml \- configuration file for wacom-steer
+.SH SYNOPSIS
+.I ~/.config/wacom-steer/config.toml
+.SH DESCRIPTION
+\fBwacom-steer\fR reads configuration parameters from a TOML-formatted file located at \fI~/.config/wacom-steer/config.toml\fR.
+If the file does not exist, internal default values are used.
+Command-line arguments always override options specified in this file.
+.SH CONFIGURATION KEYS
+.SS Device Matching
+.TP
+.BI device " (string, optional)"
+Explicit path to an input event device node (e.g. \fI"/dev/input/event7"\fR).
+.TP
+.BI device_name " (string)"
+Substring matched against input device names (default: \fI"Wacom"\fR).
+.TP
+.BI vendor " (string or integer)"
+USB vendor ID in hex string format (e.g. \fI"056a"\fR) or integer (default: \fI"056a"\fR).
+.TP
+.BI product " (string or integer)"
+USB product ID in hex string format (e.g. \fI"0375"\fR) or integer (default: \fI"0375"\fR).
+.SS Steering Configuration
+.TP
+.BI steering_mode " (string)"
+Steering mode: \fI"absolute"\fR (default) or \fI"relative"\fR.
+.TP
+.BI center " (float)"
+Physical tablet horizontal center coordinate normalized in [0.0..1.0] (default: 0.5).
+.TP
+.BI half_span " (float)"
+Normalized half-span from center to reach full steering lock (0.0..1.0] (default: 0.5).
+.TP
+.BI deadzone " (float)"
+Deadzone around steering center [0.0..1.0) (default: 0.0).
+.TP
+.BI curve " (float)"
+Exponential sensitivity exponent (> 0.0, default: 1.0).
+.TP
+.BI invert " (boolean)"
+Whether to invert steering direction (default: false).
+.SS Relative Mode Tuning
+.TP
+.BI relative_turn_rate " (float)"
+Turn rate in sweeps per second at full deflection in relative mode (default: 2.0).
+.TP
+.BI relative_return_rate " (float)"
+Auto-centering return speed in sweeps per second when inside resting deadzone (default: 3.0).
+.TP
+.BI relative_deadzone " (float)"
+Resting deadzone around neutral where return torque engages [0.0..1.0) (default: 0.05).
+.SS Dynamic Recenter
+.TP
+.BI recenter_button " (string)"
+Button used to calibrate the neutral center on the fly.
+Supports stylus barrel switches (\fI"btn_stylus"\fR, \fI"btn_stylus2"\fR), ExpressKeys (\fI"btn_0"\fR..\fI"btn_9"\fR), hex codes (\fI"0x14b"\fR), or \fI"none"\fR to disable (default: \fI"none"\fR).
+.SS Pedal / Trigger Configuration (Stylus Y-Axis)
+.TP
+.BI pedal_mode " (string)"
+Pedal mapping mode: \fI"off"\fR (default), \fI"split"\fR (LT/RT triggers), or \fI"combined"\fR (ABS_Y stick axis).
+.TP
+.BI pedal_center " (float)"
+Normalized vertical center resting position [0.0..1.0] (default: 0.5).
+.TP
+.BI pedal_half_span " (float)"
+Normalized travel from pedal center to reach 100% pedal [> 0.0..1.0] (default: 0.5).
+.TP
+.BI pedal_deadzone " (float)"
+Neutral coasting deadzone band around center [0.0..1.0) (default: 0.05).
+.TP
+.BI pedal_curve " (float)"
+Exponential curve factor for pedals (> 0.0, default: 1.0).
+.TP
+.BI pedal_invert " (boolean)"
+Invert forward/backward pedal mapping (default: false).
+.SS General Application Options
+.TP
+.BI lift " (string)"
+Stylus lift proximity behavior: \fI"center"\fR (default) or \fI"hold"\fR.
+.TP
+.BI log_level " (string)"
+Logging verbosity: \fI"trace"\fR, \fI"debug"\fR, \fI"info"\fR (default), \fI"warn"\fR, or \fI"error"\fR.
+.TP
+.BI dry_run " (boolean)"
+When true, runs diagnostic probe mode without creating a virtual gamepad (default: false).
+.SH EXAMPLE
+.PP
+.nf
+# ~/.config/wacom-steer/config.toml
+
+# Device matching parameters
+device_name = "Wacom"
+vendor = "056a"
+product = "0375"
+
+# Steering configuration
+steering_mode = "absolute"
+center = 0.5
+half_span = 0.5
+deadzone = 0.0
+curve = 1.0
+invert = false
+
+# Relative steering parameters
+relative_turn_rate = 2.0
+relative_return_rate = 3.0
+relative_deadzone = 0.05
+
+# Dynamic recenter button
+recenter_button = "btn_stylus"
+
+# Pedal / Trigger mapping (Stylus Y-Axis)
+pedal_mode = "split"
+pedal_center = 0.5
+pedal_half_span = 0.5
+pedal_deadzone = 0.05
+pedal_curve = 1.0
+pedal_invert = false
+
+# Pen lift behavior
+lift = "center"
+
+# Logging verbosity
+log_level = "info"
+
+# Dry run / probe mode
+dry_run = false
+.fi
+.SH SEE ALSO
+.BR wacom-steer (1)
+.SH AUTHORS
+Written by Tanmay <work.tanmaydeshpande@gmail.com>.

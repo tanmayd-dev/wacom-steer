@@ -1,6 +1,7 @@
 //! Configuration management and CLI parsing.
 
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
+use clap_complete::Shell;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 use std::fs;
@@ -104,7 +105,7 @@ impl fmt::Display for LogLevel {
     name = "wacom-steer",
     author = "tanmay",
     version,
-    about = "Wacom pen steering bridge for TrackMania Nations Forever"
+    about = "Wacom pen steering and analog gamepad input bridge for Linux"
 )]
 pub struct CliArgs {
     /// Path to TOML configuration file
@@ -206,6 +207,22 @@ pub struct CliArgs {
     /// Print effective configuration as TOML and exit
     #[arg(long)]
     pub print_config: bool,
+
+    /// Display or export the roff man page and exit
+    #[arg(long)]
+    pub man: bool,
+
+    /// Generate shell completion script and exit (e.g. zsh, bash, fish)
+    #[arg(long, alias = "generate-completions", value_name = "SHELL")]
+    pub completions: Option<Shell>,
+}
+
+impl CliArgs {
+    /// Generates shell completion script to stdout for the specified shell.
+    pub fn print_completions(shell: Shell) {
+        let mut cmd = Self::command();
+        clap_complete::generate(shell, &mut cmd, "wacom-steer", &mut std::io::stdout());
+    }
 }
 
 /// Helper deserializer for u16 that accepts hex strings or numbers.
@@ -348,7 +365,7 @@ impl Default for Config {
             relative_return_rate: 3.0,
             relative_deadzone: 0.05,
             recenter_button: "none".to_string(),
-            pedal_mode: PedalMode::Off,
+            pedal_mode: PedalMode::Split,
             pedal_center: 0.5,
             pedal_half_span: 0.5,
             pedal_deadzone: 0.05,
@@ -646,6 +663,8 @@ mod tests {
             log_level: None,
             dry_run: true,
             print_config: false,
+            man: false,
+            completions: None,
         };
 
         let resolved = Config::resolve(&cli).unwrap();

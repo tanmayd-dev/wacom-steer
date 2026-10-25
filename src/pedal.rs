@@ -31,7 +31,7 @@ impl Default for PedalConfig {
             deadzone: 0.05,
             curve: 1.0,
             invert: false,
-            mode: PedalMode::Off,
+            mode: PedalMode::Split,
         }
     }
 }
@@ -72,7 +72,7 @@ impl PedalConfig {
 pub enum PedalOutput {
     /// Stylus Y-axis pedal mapping is disabled.
     Off,
-    /// Split triggers: throttle on ABS_RZ [0, 255] and brake on ABS_Z [0, 255].
+    /// Split triggers: throttle on ABS_RZ [0, 32767] and brake on ABS_Z [0, 32767].
     Split { throttle: i32, brake: i32 },
     /// Combined stick axis on ABS_Y [-32767, 32767] (positive = throttle, negative = brake).
     Combined(i32),
@@ -174,9 +174,9 @@ impl PedalMapper {
             }
             PedalMode::Combined => {
                 let combined = if throttle_f > 0.0 {
-                    (throttle_f * GAMEPAD_AXIS_MAX as f64).round() as i32
+                    (-throttle_f * GAMEPAD_AXIS_MAX as f64).round() as i32
                 } else if brake_f > 0.0 {
-                    (-brake_f * GAMEPAD_AXIS_MAX as f64).round() as i32
+                    (brake_f * GAMEPAD_AXIS_MAX as f64).round() as i32
                 } else {
                     0
                 };
@@ -205,7 +205,7 @@ mod tests {
         assert!(approx_eq(config.deadzone, 0.05));
         assert!(approx_eq(config.curve, 1.0));
         assert!(!config.invert);
-        assert_eq!(config.mode, PedalMode::Off);
+        assert_eq!(config.mode, PedalMode::Split);
         assert!(config.validate().is_ok());
     }
 
@@ -372,7 +372,7 @@ mod tests {
         assert_eq!(
             mapper.map_raw(0),
             PedalOutput::Split {
-                throttle: 255,
+                throttle: GAMEPAD_TRIGGER_MAX,
                 brake: 0
             }
         );
@@ -381,7 +381,7 @@ mod tests {
         assert_eq!(
             mapper.map_raw(-500),
             PedalOutput::Split {
-                throttle: 255,
+                throttle: GAMEPAD_TRIGGER_MAX,
                 brake: 0
             }
         );
@@ -407,7 +407,7 @@ mod tests {
             mapper.map_raw(10000),
             PedalOutput::Split {
                 throttle: 0,
-                brake: 255
+                brake: GAMEPAD_TRIGGER_MAX
             }
         );
 
@@ -416,7 +416,7 @@ mod tests {
             mapper.map_raw(15000),
             PedalOutput::Split {
                 throttle: 0,
-                brake: 255
+                brake: GAMEPAD_TRIGGER_MAX
             }
         );
     }
@@ -441,7 +441,7 @@ mod tests {
         assert_eq!(
             linear_mapper.map_raw(2500),
             PedalOutput::Split {
-                throttle: 128,
+                throttle: (0.5 * GAMEPAD_TRIGGER_MAX as f64).round() as i32,
                 brake: 0
             }
         );
@@ -459,7 +459,7 @@ mod tests {
         assert_eq!(
             quad_mapper.map_raw(2500),
             PedalOutput::Split {
-                throttle: 64, // round(0.25 * 255) = 64
+                throttle: (0.25 * GAMEPAD_TRIGGER_MAX as f64).round() as i32,
                 brake: 0
             }
         );
@@ -472,7 +472,7 @@ mod tests {
             quad_mapper.map_raw(7500),
             PedalOutput::Split {
                 throttle: 0,
-                brake: 64
+                brake: (0.25 * GAMEPAD_TRIGGER_MAX as f64).round() as i32,
             }
         );
 
@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(
             sqrt_mapper.map_raw(2500),
             PedalOutput::Split {
-                throttle: (0.5_f64.sqrt() * 255.0).round() as i32,
+                throttle: (0.5_f64.sqrt() * GAMEPAD_TRIGGER_MAX as f64).round() as i32,
                 brake: 0
             }
         );
@@ -514,7 +514,7 @@ mod tests {
             mapper.map_raw(0),
             PedalOutput::Split {
                 throttle: 0,
-                brake: 255
+                brake: GAMEPAD_TRIGGER_MAX
             }
         );
 
@@ -525,7 +525,7 @@ mod tests {
         assert_eq!(
             mapper.map_raw(10000),
             PedalOutput::Split {
-                throttle: 255,
+                throttle: GAMEPAD_TRIGGER_MAX,
                 brake: 0
             }
         );
@@ -535,11 +535,11 @@ mod tests {
         combined_mapper.config.mode = PedalMode::Combined;
         assert_eq!(
             combined_mapper.map_raw(0),
-            PedalOutput::Combined(-32767) // Forward commands negative (brake)
+            PedalOutput::Combined(32767) // Forward commands positive (throttle inverted)
         );
         assert_eq!(
             combined_mapper.map_raw(10000),
-            PedalOutput::Combined(32767) // Backward commands positive (throttle)
+            PedalOutput::Combined(-32767) // Backward commands negative (brake inverted)
         );
     }
 
@@ -562,7 +562,7 @@ mod tests {
         assert_eq!(
             mapper.map_raw(2500),
             PedalOutput::Split {
-                throttle: 255,
+                throttle: GAMEPAD_TRIGGER_MAX,
                 brake: 0
             }
         );
@@ -574,7 +574,7 @@ mod tests {
         assert_eq!(
             mapper.map_raw(1000),
             PedalOutput::Split {
-                throttle: 255,
+                throttle: GAMEPAD_TRIGGER_MAX,
                 brake: 0
             }
         );
@@ -587,7 +587,7 @@ mod tests {
             mapper.map_raw(7500),
             PedalOutput::Split {
                 throttle: 0,
-                brake: 255
+                brake: GAMEPAD_TRIGGER_MAX
             }
         );
 
@@ -599,18 +599,17 @@ mod tests {
             mapper.map_raw(9000),
             PedalOutput::Split {
                 throttle: 0,
-                brake: 255
+                brake: GAMEPAD_TRIGGER_MAX
             }
         );
 
         // Midpoint of throttle active zone: u = 0.375 (Y = 3750)
-        // offset = (0.5 - 0.375) / 0.25 = 0.5 -> throttle = 0.5 -> 128
         let (throttle_f, _) = mapper.map_normalized(0.375);
         assert!(approx_eq(throttle_f, 0.5));
         assert_eq!(
             mapper.map_raw(3750),
             PedalOutput::Split {
-                throttle: 128,
+                throttle: (0.5 * GAMEPAD_TRIGGER_MAX as f64).round() as i32,
                 brake: 0
             }
         );
@@ -628,20 +627,20 @@ mod tests {
         };
         let mapper = PedalMapper::new(AxisRange::new(0, 10000), config);
 
-        // Full forward: positive 32767
-        assert_eq!(mapper.map_raw(0), PedalOutput::Combined(32767));
+        // Full forward: negative -32767 (standard stick UP)
+        assert_eq!(mapper.map_raw(0), PedalOutput::Combined(-32767));
 
-        // Half forward: positive 16384
-        assert_eq!(mapper.map_raw(2500), PedalOutput::Combined(16384));
+        // Half forward: negative -16384
+        assert_eq!(mapper.map_raw(2500), PedalOutput::Combined(-16384));
 
         // Neutral center: 0
         assert_eq!(mapper.map_raw(5000), PedalOutput::Combined(0));
 
-        // Half backward: negative -16384
-        assert_eq!(mapper.map_raw(7500), PedalOutput::Combined(-16384));
+        // Half backward: positive 16384 (standard stick DOWN)
+        assert_eq!(mapper.map_raw(7500), PedalOutput::Combined(16384));
 
-        // Full backward: negative -32767
-        assert_eq!(mapper.map_raw(10000), PedalOutput::Combined(-32767));
+        // Full backward: positive 32767
+        assert_eq!(mapper.map_raw(10000), PedalOutput::Combined(32767));
     }
 
     #[test]

@@ -23,7 +23,7 @@ relative_deadzone = 0.05
 recenter_button = "none"
 
 # Pedal / Trigger mapping parameters (Stylus Y-Axis)
-pedal_mode = "off"
+pedal_mode = "split"
 pedal_center = 0.5
 pedal_half_span = 0.5
 pedal_deadzone = 0.05

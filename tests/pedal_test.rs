@@ -1,7 +1,7 @@
 use wacom_steer::config::{LiftAction, PedalConfig, PedalMode, SteeringMode};
 use wacom_steer::launch::{handle_event, SteeringState};
 use wacom_steer::mapping::{AxisRange, MappingConfig, SteeringMapper};
-use wacom_steer::output::{MockGamepad, SteeringOutput};
+use wacom_steer::output::{MockGamepad, SteeringOutput, GAMEPAD_TRIGGER_MAX};
 use wacom_steer::pedal::PedalMapper;
 
 use evdev::{AbsoluteAxisCode, EventType, InputEvent, KeyCode};
@@ -37,6 +37,8 @@ fn test_integration_pedal_split_and_lift_reset() {
     .unwrap();
     assert_eq!(mock.current_throttle(), 0);
     assert_eq!(mock.current_brake(), 0);
+    assert!(!mock.is_btn_south_pressed());
+    assert!(!mock.is_btn_east_pressed());
 
     // Forward throttle (Y=0 -> full forward)
     let forward_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 0);
@@ -51,8 +53,9 @@ fn test_integration_pedal_split_and_lift_reset() {
         SteeringMode::Absolute,
     )
     .unwrap();
-    assert_eq!(mock.current_throttle(), 255);
+    assert_eq!(mock.current_throttle(), GAMEPAD_TRIGGER_MAX);
     assert_eq!(mock.current_brake(), 0);
+    assert!(mock.is_btn_south_pressed());
 
     // Pen lift centers all outputs
     let pen_up = InputEvent::new(EventType::KEY.0, KeyCode::BTN_TOOL_PEN.0, 0);
@@ -69,6 +72,8 @@ fn test_integration_pedal_split_and_lift_reset() {
     .unwrap();
     assert_eq!(mock.current_throttle(), 0);
     assert_eq!(mock.current_brake(), 0);
+    assert!(!mock.is_btn_south_pressed());
+    assert!(!mock.is_btn_east_pressed());
 }
 
 #[test]
@@ -84,7 +89,7 @@ fn test_integration_pedal_combined() {
     let mut rel_opt = None;
     let mut state = SteeringState::new(true, true, 0.5, None);
 
-    // Forward -> positive combined pedal (32767)
+    // Forward -> negative combined pedal (-32767, stick up)
     let forward_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 0);
     handle_event(
         &forward_ev,
@@ -97,9 +102,10 @@ fn test_integration_pedal_combined() {
         SteeringMode::Absolute,
     )
     .unwrap();
-    assert_eq!(mock.current_combined_pedal(), 32767);
+    assert_eq!(mock.current_combined_pedal(), -32767);
+    assert!(mock.is_btn_south_pressed());
 
-    // Backward -> negative combined pedal (-32767)
+    // Backward -> positive combined pedal (32767, stick down)
     let backward_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 10000);
     handle_event(
         &backward_ev,
@@ -112,5 +118,6 @@ fn test_integration_pedal_combined() {
         SteeringMode::Absolute,
     )
     .unwrap();
-    assert_eq!(mock.current_combined_pedal(), -32767);
+    assert_eq!(mock.current_combined_pedal(), 32767);
+    assert!(mock.is_btn_east_pressed());
 }

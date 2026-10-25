@@ -1,4 +1,4 @@
-//! Wacom pen steering bridge for TrackMania Nations Forever and Wine/Proton.
+//! Wacom pen steering and analog gamepad input bridge for Linux, Wine, and Proton.
 
 pub mod config;
 pub mod device;

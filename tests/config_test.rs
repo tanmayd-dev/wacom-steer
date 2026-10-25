@@ -35,6 +35,8 @@ fn test_packaging_default_toml_matches_defaults() {
         log_level: None,
         dry_run: false,
         print_config: false,
+        man: false,
+        completions: None,
     };
 
     let resolved =

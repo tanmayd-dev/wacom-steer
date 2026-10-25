@@ -16,7 +16,7 @@ pub const GAMEPAD_AXIS_MAX: i32 = 32767;
 
 /// Minimum and maximum range for virtual gamepad triggers (ABS_Z and ABS_RZ).
 pub const GAMEPAD_TRIGGER_MIN: i32 = 0;
-pub const GAMEPAD_TRIGGER_MAX: i32 = 255;
+pub const GAMEPAD_TRIGGER_MAX: i32 = 32767;
 
 /// Button codes required for standard gamepad recognition.
 pub const GAMEPAD_BUTTON_CODES: &[KeyCode] = &[
@@ -44,10 +44,10 @@ pub trait SteeringOutput: Send {
     /// Emits a steering value for ABS_X (clamped to [-32767, 32767]).
     fn set_steering(&mut self, value: i32) -> io::Result<()>;
 
-    /// Emits a throttle value for ABS_RZ (clamped to [0, 255]).
+    /// Emits a throttle value for ABS_RZ (clamped to [0, 32767]).
     fn set_throttle(&mut self, value: i32) -> io::Result<()>;
 
-    /// Emits a brake value for ABS_Z (clamped to [0, 255]).
+    /// Emits a brake value for ABS_Z (clamped to [0, 32767]).
     fn set_brake(&mut self, value: i32) -> io::Result<()>;
 
     /// Emits combined throttle/brake for ABS_Y (clamped to [-32767, 32767]).
@@ -85,6 +85,8 @@ pub struct UinputGamepad {
     current_throttle: i32,
     current_brake: i32,
     current_combined_pedal: i32,
+    current_btn_south: bool,
+    current_btn_east: bool,
 }
 
 impl UinputGamepad {
@@ -122,7 +124,7 @@ impl UinputGamepad {
             .build()
             .map_err(|e| io::Error::other(format!("Failed to build uinput virtual device: {e}")))?;
 
-        // Emit initial neutral state for all axes
+        // Emit initial neutral state for all axes and pedal buttons
         let initial_events = [
             InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 0),
             InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 0),
@@ -130,6 +132,8 @@ impl UinputGamepad {
             InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RX.0, 0),
             InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RY.0, 0),
             InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RZ.0, 0),
+            InputEvent::new(EventType::KEY.0, KeyCode::BTN_SOUTH.0, 0),
+            InputEvent::new(EventType::KEY.0, KeyCode::BTN_EAST.0, 0),
         ];
         device.emit(&initial_events)?;
 
@@ -139,6 +143,8 @@ impl UinputGamepad {
             current_throttle: 0,
             current_brake: 0,
             current_combined_pedal: 0,
+            current_btn_south: false,
+            current_btn_east: false,
         })
     }
 }
@@ -154,25 +160,96 @@ impl SteeringOutput for UinputGamepad {
 
     fn set_throttle(&mut self, value: i32) -> io::Result<()> {
         let clamped = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
-        let event = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RZ.0, clamped);
-        self.device.emit(&[event])?;
+        let btn_active = clamped > (GAMEPAD_TRIGGER_MAX / 10);
+        let mut events = Vec::with_capacity(2);
+        events.push(InputEvent::new(
+            EventType::ABSOLUTE.0,
+            AbsoluteAxisCode::ABS_RZ.0,
+            clamped,
+        ));
+        if btn_active != self.current_btn_south {
+            events.push(InputEvent::new(
+                EventType::KEY.0,
+                KeyCode::BTN_SOUTH.0,
+                if btn_active { 1 } else { 0 },
+            ));
+            self.current_btn_south = btn_active;
+        }
+        self.device.emit(&events)?;
         self.current_throttle = clamped;
         Ok(())
     }
 
     fn set_brake(&mut self, value: i32) -> io::Result<()> {
         let clamped = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
-        let event = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Z.0, clamped);
-        self.device.emit(&[event])?;
+        let btn_active = clamped > (GAMEPAD_TRIGGER_MAX / 10);
+        let mut events = Vec::with_capacity(2);
+        events.push(InputEvent::new(
+            EventType::ABSOLUTE.0,
+            AbsoluteAxisCode::ABS_Z.0,
+            clamped,
+        ));
+        if btn_active != self.current_btn_east {
+            events.push(InputEvent::new(
+                EventType::KEY.0,
+                KeyCode::BTN_EAST.0,
+                if btn_active { 1 } else { 0 },
+            ));
+            self.current_btn_east = btn_active;
+        }
+        self.device.emit(&events)?;
         self.current_brake = clamped;
         Ok(())
     }
 
     fn set_combined_pedal(&mut self, value: i32) -> io::Result<()> {
         let clamped = value.clamp(GAMEPAD_AXIS_MIN, GAMEPAD_AXIS_MAX);
-        let event = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, clamped);
-        self.device.emit(&[event])?;
+        let btn_south = clamped < -(GAMEPAD_AXIS_MAX / 10);
+        let btn_east = clamped > (GAMEPAD_AXIS_MAX / 10);
+        let mut events = Vec::with_capacity(3);
+        events.push(InputEvent::new(
+            EventType::ABSOLUTE.0,
+            AbsoluteAxisCode::ABS_Y.0,
+            clamped,
+        ));
+        if btn_south != self.current_btn_south {
+            events.push(InputEvent::new(
+                EventType::KEY.0,
+                KeyCode::BTN_SOUTH.0,
+                if btn_south { 1 } else { 0 },
+            ));
+            self.current_btn_south = btn_south;
+        }
+        if btn_east != self.current_btn_east {
+            events.push(InputEvent::new(
+                EventType::KEY.0,
+                KeyCode::BTN_EAST.0,
+                if btn_east { 1 } else { 0 },
+            ));
+            self.current_btn_east = btn_east;
+        }
+        self.device.emit(&events)?;
         self.current_combined_pedal = clamped;
+        Ok(())
+    }
+
+    fn center(&mut self) -> io::Result<()> {
+        self.set_steering(0)?;
+        self.set_throttle(0)?;
+        self.set_brake(0)?;
+        self.set_combined_pedal(0)?;
+        let mut events = Vec::new();
+        if self.current_btn_south {
+            events.push(InputEvent::new(EventType::KEY.0, KeyCode::BTN_SOUTH.0, 0));
+            self.current_btn_south = false;
+        }
+        if self.current_btn_east {
+            events.push(InputEvent::new(EventType::KEY.0, KeyCode::BTN_EAST.0, 0));
+            self.current_btn_east = false;
+        }
+        if !events.is_empty() {
+            self.device.emit(&events)?;
+        }
         Ok(())
     }
 
@@ -205,6 +282,8 @@ pub struct MockGamepad {
     pub current_throttle: i32,
     pub current_brake: i32,
     pub current_combined_pedal: i32,
+    pub current_btn_south: bool,
+    pub current_btn_east: bool,
     pub history: Vec<i32>,
     pub throttle_history: Vec<i32>,
     pub brake_history: Vec<i32>,
@@ -225,6 +304,8 @@ impl MockGamepad {
             current_throttle: 0,
             current_brake: 0,
             current_combined_pedal: 0,
+            current_btn_south: false,
+            current_btn_east: false,
             history: vec![0], // initial neutral state
             throttle_history: vec![0],
             brake_history: vec![0],
@@ -240,6 +321,14 @@ impl MockGamepad {
         self.current_steering
     }
 
+    pub fn is_btn_south_pressed(&self) -> bool {
+        self.current_btn_south
+    }
+
+    pub fn is_btn_east_pressed(&self) -> bool {
+        self.current_btn_east
+    }
+
     pub fn clear(&mut self) {
         self.history.clear();
         self.throttle_history.clear();
@@ -249,6 +338,8 @@ impl MockGamepad {
         self.current_throttle = 0;
         self.current_brake = 0;
         self.current_combined_pedal = 0;
+        self.current_btn_south = false;
+        self.current_btn_east = false;
     }
 }
 
@@ -263,6 +354,7 @@ impl SteeringOutput for MockGamepad {
     fn set_throttle(&mut self, value: i32) -> io::Result<()> {
         let clamped = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
         self.current_throttle = clamped;
+        self.current_btn_south = clamped > (GAMEPAD_TRIGGER_MAX / 10);
         self.throttle_history.push(clamped);
         Ok(())
     }
@@ -270,6 +362,7 @@ impl SteeringOutput for MockGamepad {
     fn set_brake(&mut self, value: i32) -> io::Result<()> {
         let clamped = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
         self.current_brake = clamped;
+        self.current_btn_east = clamped > (GAMEPAD_TRIGGER_MAX / 10);
         self.brake_history.push(clamped);
         Ok(())
     }
@@ -277,7 +370,19 @@ impl SteeringOutput for MockGamepad {
     fn set_combined_pedal(&mut self, value: i32) -> io::Result<()> {
         let clamped = value.clamp(GAMEPAD_AXIS_MIN, GAMEPAD_AXIS_MAX);
         self.current_combined_pedal = clamped;
+        self.current_btn_south = clamped < -(GAMEPAD_AXIS_MAX / 10);
+        self.current_btn_east = clamped > (GAMEPAD_AXIS_MAX / 10);
         self.combined_history.push(clamped);
+        Ok(())
+    }
+
+    fn center(&mut self) -> io::Result<()> {
+        self.set_steering(0)?;
+        self.set_throttle(0)?;
+        self.set_brake(0)?;
+        self.set_combined_pedal(0)?;
+        self.current_btn_south = false;
+        self.current_btn_east = false;
         Ok(())
     }
 
@@ -396,20 +501,29 @@ mod tests {
         assert_eq!(mock.current_steering(), GAMEPAD_AXIS_MIN);
 
         // Pedals check
-        mock.set_throttle(200).unwrap();
-        assert_eq!(mock.current_throttle(), 200);
+        mock.set_throttle(20000).unwrap();
+        assert_eq!(mock.current_throttle(), 20000);
+        assert!(mock.is_btn_south_pressed());
 
-        mock.set_throttle(300).unwrap();
+        mock.set_throttle(40000).unwrap();
         assert_eq!(mock.current_throttle(), GAMEPAD_TRIGGER_MAX);
+        assert!(mock.is_btn_south_pressed());
 
-        mock.set_brake(150).unwrap();
-        assert_eq!(mock.current_brake(), 150);
+        mock.set_brake(15000).unwrap();
+        assert_eq!(mock.current_brake(), 15000);
+        assert!(mock.is_btn_east_pressed());
 
-        mock.set_brake(500).unwrap();
+        mock.set_brake(50000).unwrap();
         assert_eq!(mock.current_brake(), GAMEPAD_TRIGGER_MAX);
+        assert!(mock.is_btn_east_pressed());
 
         mock.set_combined_pedal(25000).unwrap();
         assert_eq!(mock.current_combined_pedal(), 25000);
+        assert!(mock.is_btn_east_pressed());
+
+        mock.set_combined_pedal(-25000).unwrap();
+        assert_eq!(mock.current_combined_pedal(), -25000);
+        assert!(mock.is_btn_south_pressed());
 
         // Centering check
         mock.center().unwrap();
@@ -417,6 +531,8 @@ mod tests {
         assert_eq!(mock.current_throttle(), 0);
         assert_eq!(mock.current_brake(), 0);
         assert_eq!(mock.current_combined_pedal(), 0);
+        assert!(!mock.is_btn_south_pressed());
+        assert!(!mock.is_btn_east_pressed());
 
         assert_eq!(mock.device_name(), VIRTUAL_GAMEPAD_NAME);
     }

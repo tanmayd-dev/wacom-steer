@@ -151,11 +151,9 @@ pub fn handle_event(
         }
         EventType::ABSOLUTE => {
             let axis = AbsoluteAxisCode(event.code());
-            if axis == AbsoluteAxisCode::ABS_X {
+            if axis == AbsoluteAxisCode::ABS_X && (state.pen_in_proximity || !state.has_pen_tool) {
                 state.last_raw_x = Some(event.value());
-                if (state.pen_in_proximity || !state.has_pen_tool)
-                    && steering_mode == SteeringMode::Absolute
-                {
+                if steering_mode == SteeringMode::Absolute {
                     let mapped = mapper.map_raw(event.value());
                     if mapped != state.current_steering {
                         output.set_steering(mapped)?;
@@ -188,6 +186,135 @@ pub fn handle_event(
             }
         }
         _ => {}
+    }
+    Ok(())
+}
+
+/// Processes a single frame of events from a source device (bounded by SYN_REPORT).
+///
+/// Handles tool proximity transitions and suppresses bogus zero-coordinate packets
+/// emitted by kernel tablet drivers (such as `wacom_wac`) on proximity-out.
+#[allow(clippy::too_many_arguments)]
+fn process_frame(
+    frame: &[InputEvent],
+    state: &mut SteeringState,
+    mapper: &mut SteeringMapper,
+    pedal_mapper: &PedalMapper,
+    relative_steering: &mut Option<RelativeSteering>,
+    output: &mut impl SteeringOutput,
+    lift: LiftAction,
+    steering_mode: SteeringMode,
+) -> io::Result<()> {
+    // Check if this frame signals proximity out (BTN_TOOL_PEN = 0)
+    let pen_lift_in_frame = frame.iter().any(|ev| {
+        ev.event_type() == EventType::KEY && ev.code() == KeyCode::BTN_TOOL_PEN.0 && ev.value() == 0
+    });
+
+    if pen_lift_in_frame {
+        let was_in_prox = state.pen_in_proximity;
+        state.pen_in_proximity = false;
+
+        if was_in_prox {
+            log::debug!(
+                "Pen lifted from tablet (proximity lost). Lift action: {}, holding steering={}",
+                lift,
+                state.current_steering
+            );
+            if lift == LiftAction::Center {
+                if state.current_steering != 0
+                    || state.current_throttle != 0
+                    || state.current_brake != 0
+                    || state.current_combined_pedal != 0
+                {
+                    output.center()?;
+                    state.current_steering = 0;
+                    state.current_throttle = 0;
+                    state.current_brake = 0;
+                    state.current_combined_pedal = 0;
+                }
+                if let Some(rel) = relative_steering.as_mut() {
+                    rel.reset();
+                }
+            }
+        }
+
+        // When proximity is lost, kernel drivers emit zeroed ABS_X/ABS_Y in the same frame.
+        // Process non-coordinate events (e.g. key releases), but skip ABS_X and ABS_Y
+        // to protect the held values from being overwritten with bogus zeros.
+        for ev in frame {
+            if ev.event_type() != EventType::ABSOLUTE {
+                handle_event(
+                    ev,
+                    state,
+                    mapper,
+                    pedal_mapper,
+                    relative_steering,
+                    output,
+                    lift,
+                    steering_mode,
+                )?;
+            }
+        }
+        return Ok(());
+    }
+
+    // Normal frame: process all events
+    for ev in frame {
+        handle_event(
+            ev,
+            state,
+            mapper,
+            pedal_mapper,
+            relative_steering,
+            output,
+            lift,
+            steering_mode,
+        )?;
+    }
+    Ok(())
+}
+
+/// Processes a batch of events, splitting into frames by SYN_REPORT.
+#[allow(clippy::too_many_arguments)]
+pub fn process_event_batch(
+    events: &[InputEvent],
+    state: &mut SteeringState,
+    mapper: &mut SteeringMapper,
+    pedal_mapper: &PedalMapper,
+    relative_steering: &mut Option<RelativeSteering>,
+    output: &mut impl SteeringOutput,
+    lift: LiftAction,
+    steering_mode: SteeringMode,
+) -> io::Result<()> {
+    let mut frame_start = 0;
+    for (i, ev) in events.iter().enumerate() {
+        if ev.event_type() == EventType::SYNCHRONIZATION {
+            let frame = &events[frame_start..=i];
+            process_frame(
+                frame,
+                state,
+                mapper,
+                pedal_mapper,
+                relative_steering,
+                output,
+                lift,
+                steering_mode,
+            )?;
+            frame_start = i + 1;
+        }
+    }
+    if frame_start < events.len() {
+        let frame = &events[frame_start..];
+        process_frame(
+            frame,
+            state,
+            mapper,
+            pedal_mapper,
+            relative_steering,
+            output,
+            lift,
+            steering_mode,
+        )?;
     }
     Ok(())
 }
@@ -257,18 +384,17 @@ pub fn run_event_loop(
         if pfds[0].revents & libc::POLLIN != 0 {
             match pen_device.fetch_events() {
                 Ok(events) => {
-                    for ev in events {
-                        handle_event(
-                            &ev,
-                            &mut state,
-                            mapper,
-                            pedal_mapper,
-                            &mut relative_steering,
-                            output,
-                            config.lift,
-                            config.steering_mode,
-                        )?;
-                    }
+                    let batch: Vec<InputEvent> = events.collect();
+                    process_event_batch(
+                        &batch,
+                        &mut state,
+                        mapper,
+                        pedal_mapper,
+                        &mut relative_steering,
+                        output,
+                        config.lift,
+                        config.steering_mode,
+                    )?;
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                 Err(e) => {
@@ -283,18 +409,17 @@ pub fn run_event_loop(
             if let Some(ref mut pad) = pad_device {
                 match pad.fetch_events() {
                     Ok(events) => {
-                        for ev in events {
-                            handle_event(
-                                &ev,
-                                &mut state,
-                                mapper,
-                                pedal_mapper,
-                                &mut relative_steering,
-                                output,
-                                config.lift,
-                                config.steering_mode,
-                            )?;
-                        }
+                        let batch: Vec<InputEvent> = events.collect();
+                        process_event_batch(
+                            &batch,
+                            &mut state,
+                            mapper,
+                            pedal_mapper,
+                            &mut relative_steering,
+                            output,
+                            config.lift,
+                            config.steering_mode,
+                        )?;
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
                     Err(e) => {
@@ -463,6 +588,18 @@ pub fn run_probe(
 
 /// Primary orchestrator invoked from main.
 pub fn run(cli: CliArgs) -> Result<(), Box<dyn Error>> {
+    // Handle --man flag immediately
+    if cli.man {
+        print!("{}", include_str!("../man/wacom-steer.1"));
+        return Ok(());
+    }
+
+    // Handle --completions flag immediately
+    if let Some(shell) = cli.completions {
+        CliArgs::print_completions(shell);
+        return Ok(());
+    }
+
     // Handle --print-config flag immediately
     if cli.print_config {
         let config = Config::resolve(&cli)?;
@@ -557,7 +694,7 @@ pub fn run(cli: CliArgs) -> Result<(), Box<dyn Error>> {
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term_signal))?;
 
     log::info!(
-        "wacom-steer active. Bridging '{}' -> '{}'. Ready for TrackMania / Proton.",
+        "wacom-steer active. Bridging '{}' -> '{}'. Ready for gamepad inputs / Wine / Proton.",
         selected.name,
         output.device_name()
     );
@@ -702,6 +839,59 @@ mod tests {
     }
 
     #[test]
+    fn test_proximity_out_frame_with_bogus_zero_coordinates_lift_hold() {
+        let mut mock = MockGamepad::new();
+        let mut mapper = SteeringMapper::with_default_output(
+            AxisRange::new(0, 20000),
+            crate::mapping::MappingConfig::default(),
+        );
+        let pedal_mapper = PedalMapper::new(AxisRange::new(0, 10000), PedalConfig::default());
+        let mut rel_opt = None;
+        let mut state = SteeringState::new(true, true, 0.5, None);
+
+        // Pen at center X (10000 -> 0 steering) and top Y (0 -> full forward throttle)
+        let center_x = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 10000);
+        let top_y = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 0);
+        let syn = InputEvent::new(EventType::SYNCHRONIZATION.0, 0, 0);
+
+        process_event_batch(
+            &[center_x, top_y, syn],
+            &mut state,
+            &mut mapper,
+            &pedal_mapper,
+            &mut rel_opt,
+            &mut mock,
+            LiftAction::Hold,
+            SteeringMode::Absolute,
+        )
+        .unwrap();
+        assert_eq!(mock.current_steering(), 0);
+        assert_eq!(mock.current_throttle(), GAMEPAD_TRIGGER_MAX);
+
+        // Hardware lifts: Wacom driver emits ABS_X=0, ABS_Y=0, BTN_TOOL_PEN=0 in the proximity-out frame!
+        let bogus_x = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 0);
+        let bogus_y = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 0);
+        let pen_up = InputEvent::new(EventType::KEY.0, KeyCode::BTN_TOOL_PEN.0, 0);
+
+        process_event_batch(
+            &[bogus_x, bogus_y, pen_up, syn],
+            &mut state,
+            &mut mapper,
+            &pedal_mapper,
+            &mut rel_opt,
+            &mut mock,
+            LiftAction::Hold,
+            SteeringMode::Absolute,
+        )
+        .unwrap();
+
+        // Steering must NOT be corrupted to -32767 (sharp left)! It must hold at 0 (center)!
+        assert_eq!(mock.current_steering(), 0);
+        // Throttle must hold at full forward!
+        assert_eq!(mock.current_throttle(), GAMEPAD_TRIGGER_MAX);
+    }
+
+    #[test]
     fn test_handle_event_pedals_split() {
         let mut mock = MockGamepad::new();
         let mut mapper = SteeringMapper::with_default_output(
@@ -727,7 +917,7 @@ mod tests {
             SteeringMode::Absolute,
         )
         .unwrap();
-        assert_eq!(mock.current_throttle(), 255);
+        assert_eq!(mock.current_throttle(), GAMEPAD_TRIGGER_MAX);
         assert_eq!(mock.current_brake(), 0);
 
         // Y=10000 is full backward (brake)
@@ -744,7 +934,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mock.current_throttle(), 0);
-        assert_eq!(mock.current_brake(), 255);
+        assert_eq!(mock.current_brake(), GAMEPAD_TRIGGER_MAX);
 
         // Y=5000 is neutral coasting
         let center_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 5000);
@@ -773,7 +963,7 @@ mod tests {
             LiftAction::Center,
             SteeringMode::Absolute,
         );
-        assert_eq!(mock.current_throttle(), 255);
+        assert_eq!(mock.current_throttle(), GAMEPAD_TRIGGER_MAX);
 
         let pen_up = InputEvent::new(EventType::KEY.0, KeyCode::BTN_TOOL_PEN.0, 0);
         handle_event(

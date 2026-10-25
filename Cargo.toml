@@ -2,7 +2,7 @@
 name = "wacom-steer"
 version = "0.1.0"
 edition = "2021"
-description = "Wacom pen steering bridge for TrackMania Nations Forever"
+description = "Wacom pen steering and analog gamepad input bridge for Linux"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/tanmayd-dev/wacom-steer"
@@ -17,6 +17,7 @@ path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.6.7", features = ["derive"] }
+clap_complete = "4"
 env_logger = "0.11.11"
 evdev = "0.13.2"
 libc = "0.2"
