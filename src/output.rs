@@ -14,6 +14,10 @@ pub const VIRTUAL_GAMEPAD_NAME: &str = "Wacom Steer Virtual Gamepad";
 pub const GAMEPAD_AXIS_MIN: i32 = -32767;
 pub const GAMEPAD_AXIS_MAX: i32 = 32767;
 
+/// Minimum and maximum range for virtual gamepad triggers (ABS_Z and ABS_RZ).
+pub const GAMEPAD_TRIGGER_MIN: i32 = 0;
+pub const GAMEPAD_TRIGGER_MAX: i32 = 255;
+
 /// Button codes required for standard gamepad recognition.
 pub const GAMEPAD_BUTTON_CODES: &[KeyCode] = &[
     KeyCode::BTN_SOUTH,  // BTN_GAMEPAD / BTN_A (0x130)
@@ -29,18 +33,33 @@ pub const GAMEPAD_BUTTON_CODES: &[KeyCode] = &[
 pub const GAMEPAD_AXIS_CODES: &[AbsoluteAxisCode] = &[
     AbsoluteAxisCode::ABS_X,
     AbsoluteAxisCode::ABS_Y,
+    AbsoluteAxisCode::ABS_Z,
     AbsoluteAxisCode::ABS_RX,
     AbsoluteAxisCode::ABS_RY,
+    AbsoluteAxisCode::ABS_RZ,
 ];
 
-/// Trait abstracting the steering output device.
+/// Trait abstracting the steering and pedal output device.
 pub trait SteeringOutput: Send {
     /// Emits a steering value for ABS_X (clamped to [-32767, 32767]).
     fn set_steering(&mut self, value: i32) -> io::Result<()>;
 
-    /// Emits neutral steering (0.0 / 0) and synchronizes state.
+    /// Emits a throttle value for ABS_RZ (clamped to [0, 255]).
+    fn set_throttle(&mut self, value: i32) -> io::Result<()>;
+
+    /// Emits a brake value for ABS_Z (clamped to [0, 255]).
+    fn set_brake(&mut self, value: i32) -> io::Result<()>;
+
+    /// Emits combined throttle/brake for ABS_Y (clamped to [-32767, 32767]).
+    fn set_combined_pedal(&mut self, value: i32) -> io::Result<()>;
+
+    /// Emits neutral steering (0.0 / 0) and releases all pedals.
     fn center(&mut self) -> io::Result<()> {
-        self.set_steering(0)
+        self.set_steering(0)?;
+        self.set_throttle(0)?;
+        self.set_brake(0)?;
+        self.set_combined_pedal(0)?;
+        Ok(())
     }
 
     /// Name of the output device.
@@ -48,12 +67,24 @@ pub trait SteeringOutput: Send {
 
     /// Current steering axis value.
     fn current_steering(&self) -> i32;
+
+    /// Current throttle trigger value.
+    fn current_throttle(&self) -> i32;
+
+    /// Current brake trigger value.
+    fn current_brake(&self) -> i32;
+
+    /// Current combined pedal axis value.
+    fn current_combined_pedal(&self) -> i32;
 }
 
 /// Real uinput virtual gamepad device.
 pub struct UinputGamepad {
     device: VirtualDevice,
     current_steering: i32,
+    current_throttle: i32,
+    current_brake: i32,
+    current_combined_pedal: i32,
 }
 
 impl UinputGamepad {
@@ -64,7 +95,8 @@ impl UinputGamepad {
             keys.insert(k);
         }
 
-        let abs_info = AbsInfo::new(0, GAMEPAD_AXIS_MIN, GAMEPAD_AXIS_MAX, 0, 0, 0);
+        let stick_abs_info = AbsInfo::new(0, GAMEPAD_AXIS_MIN, GAMEPAD_AXIS_MAX, 0, 0, 0);
+        let trigger_abs_info = AbsInfo::new(0, GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX, 0, 0, 0);
 
         let mut builder = VirtualDevice::builder()
             .map_err(|e| io::Error::other(format!("Failed to initialize uinput: {e}")))?
@@ -75,7 +107,12 @@ impl UinputGamepad {
             .map_err(|e| io::Error::other(format!("Failed to set uinput keys: {e}")))?;
 
         for &axis in GAMEPAD_AXIS_CODES {
-            let setup = UinputAbsSetup::new(axis, abs_info);
+            let setup = match axis {
+                AbsoluteAxisCode::ABS_Z | AbsoluteAxisCode::ABS_RZ => {
+                    UinputAbsSetup::new(axis, trigger_abs_info)
+                }
+                _ => UinputAbsSetup::new(axis, stick_abs_info),
+            };
             builder = builder.with_absolute_axis(&setup).map_err(|e| {
                 io::Error::other(format!("Failed to set uinput axis {axis:?}: {e}"))
             })?;
@@ -89,14 +126,19 @@ impl UinputGamepad {
         let initial_events = [
             InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 0),
             InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 0),
+            InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Z.0, 0),
             InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RX.0, 0),
             InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RY.0, 0),
+            InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RZ.0, 0),
         ];
         device.emit(&initial_events)?;
 
         Ok(Self {
             device,
             current_steering: 0,
+            current_throttle: 0,
+            current_brake: 0,
+            current_combined_pedal: 0,
         })
     }
 }
@@ -110,12 +152,48 @@ impl SteeringOutput for UinputGamepad {
         Ok(())
     }
 
+    fn set_throttle(&mut self, value: i32) -> io::Result<()> {
+        let clamped = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
+        let event = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_RZ.0, clamped);
+        self.device.emit(&[event])?;
+        self.current_throttle = clamped;
+        Ok(())
+    }
+
+    fn set_brake(&mut self, value: i32) -> io::Result<()> {
+        let clamped = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
+        let event = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Z.0, clamped);
+        self.device.emit(&[event])?;
+        self.current_brake = clamped;
+        Ok(())
+    }
+
+    fn set_combined_pedal(&mut self, value: i32) -> io::Result<()> {
+        let clamped = value.clamp(GAMEPAD_AXIS_MIN, GAMEPAD_AXIS_MAX);
+        let event = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, clamped);
+        self.device.emit(&[event])?;
+        self.current_combined_pedal = clamped;
+        Ok(())
+    }
+
     fn device_name(&self) -> &str {
         VIRTUAL_GAMEPAD_NAME
     }
 
     fn current_steering(&self) -> i32 {
         self.current_steering
+    }
+
+    fn current_throttle(&self) -> i32 {
+        self.current_throttle
+    }
+
+    fn current_brake(&self) -> i32 {
+        self.current_brake
+    }
+
+    fn current_combined_pedal(&self) -> i32 {
+        self.current_combined_pedal
     }
 }
 
@@ -124,7 +202,13 @@ impl SteeringOutput for UinputGamepad {
 pub struct MockGamepad {
     pub name: String,
     pub current_steering: i32,
+    pub current_throttle: i32,
+    pub current_brake: i32,
+    pub current_combined_pedal: i32,
     pub history: Vec<i32>,
+    pub throttle_history: Vec<i32>,
+    pub brake_history: Vec<i32>,
+    pub combined_history: Vec<i32>,
 }
 
 impl Default for MockGamepad {
@@ -138,7 +222,13 @@ impl MockGamepad {
         Self {
             name: VIRTUAL_GAMEPAD_NAME.to_string(),
             current_steering: 0,
+            current_throttle: 0,
+            current_brake: 0,
+            current_combined_pedal: 0,
             history: vec![0], // initial neutral state
+            throttle_history: vec![0],
+            brake_history: vec![0],
+            combined_history: vec![0],
         }
     }
 
@@ -152,7 +242,13 @@ impl MockGamepad {
 
     pub fn clear(&mut self) {
         self.history.clear();
+        self.throttle_history.clear();
+        self.brake_history.clear();
+        self.combined_history.clear();
         self.current_steering = 0;
+        self.current_throttle = 0;
+        self.current_brake = 0;
+        self.current_combined_pedal = 0;
     }
 }
 
@@ -164,6 +260,27 @@ impl SteeringOutput for MockGamepad {
         Ok(())
     }
 
+    fn set_throttle(&mut self, value: i32) -> io::Result<()> {
+        let clamped = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
+        self.current_throttle = clamped;
+        self.throttle_history.push(clamped);
+        Ok(())
+    }
+
+    fn set_brake(&mut self, value: i32) -> io::Result<()> {
+        let clamped = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
+        self.current_brake = clamped;
+        self.brake_history.push(clamped);
+        Ok(())
+    }
+
+    fn set_combined_pedal(&mut self, value: i32) -> io::Result<()> {
+        let clamped = value.clamp(GAMEPAD_AXIS_MIN, GAMEPAD_AXIS_MAX);
+        self.current_combined_pedal = clamped;
+        self.combined_history.push(clamped);
+        Ok(())
+    }
+
     fn device_name(&self) -> &str {
         &self.name
     }
@@ -171,12 +288,27 @@ impl SteeringOutput for MockGamepad {
     fn current_steering(&self) -> i32 {
         self.current_steering
     }
+
+    fn current_throttle(&self) -> i32 {
+        self.current_throttle
+    }
+
+    fn current_brake(&self) -> i32 {
+        self.current_brake
+    }
+
+    fn current_combined_pedal(&self) -> i32 {
+        self.current_combined_pedal
+    }
 }
 
 /// Dry-run output that records steering and logs without real uinput access.
 #[derive(Debug, Default)]
 pub struct DryRunGamepad {
     current_steering: i32,
+    current_throttle: i32,
+    current_brake: i32,
+    current_combined_pedal: i32,
 }
 
 impl SteeringOutput for DryRunGamepad {
@@ -189,12 +321,51 @@ impl SteeringOutput for DryRunGamepad {
         Ok(())
     }
 
+    fn set_throttle(&mut self, value: i32) -> io::Result<()> {
+        self.current_throttle = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
+        log::debug!(
+            "[DryRun] Virtual gamepad ABS_RZ (throttle) set to {}",
+            self.current_throttle
+        );
+        Ok(())
+    }
+
+    fn set_brake(&mut self, value: i32) -> io::Result<()> {
+        self.current_brake = value.clamp(GAMEPAD_TRIGGER_MIN, GAMEPAD_TRIGGER_MAX);
+        log::debug!(
+            "[DryRun] Virtual gamepad ABS_Z (brake) set to {}",
+            self.current_brake
+        );
+        Ok(())
+    }
+
+    fn set_combined_pedal(&mut self, value: i32) -> io::Result<()> {
+        self.current_combined_pedal = value.clamp(GAMEPAD_AXIS_MIN, GAMEPAD_AXIS_MAX);
+        log::debug!(
+            "[DryRun] Virtual gamepad ABS_Y (combined pedal) set to {}",
+            self.current_combined_pedal
+        );
+        Ok(())
+    }
+
     fn device_name(&self) -> &str {
         VIRTUAL_GAMEPAD_NAME
     }
 
     fn current_steering(&self) -> i32 {
         self.current_steering
+    }
+
+    fn current_throttle(&self) -> i32 {
+        self.current_throttle
+    }
+
+    fn current_brake(&self) -> i32 {
+        self.current_brake
+    }
+
+    fn current_combined_pedal(&self) -> i32 {
+        self.current_combined_pedal
     }
 }
 
@@ -206,6 +377,9 @@ mod tests {
     fn test_mock_gamepad_operations() {
         let mut mock = MockGamepad::new();
         assert_eq!(mock.current_steering(), 0);
+        assert_eq!(mock.current_throttle(), 0);
+        assert_eq!(mock.current_brake(), 0);
+        assert_eq!(mock.current_combined_pedal(), 0);
         assert_eq!(mock.events(), &[0]);
 
         mock.set_steering(12345).unwrap();
@@ -214,16 +388,35 @@ mod tests {
         mock.set_steering(-30000).unwrap();
         assert_eq!(mock.current_steering(), -30000);
 
-        // Clamping check
+        // Clamping check for steering
         mock.set_steering(50000).unwrap();
         assert_eq!(mock.current_steering(), GAMEPAD_AXIS_MAX);
 
         mock.set_steering(-50000).unwrap();
         assert_eq!(mock.current_steering(), GAMEPAD_AXIS_MIN);
 
+        // Pedals check
+        mock.set_throttle(200).unwrap();
+        assert_eq!(mock.current_throttle(), 200);
+
+        mock.set_throttle(300).unwrap();
+        assert_eq!(mock.current_throttle(), GAMEPAD_TRIGGER_MAX);
+
+        mock.set_brake(150).unwrap();
+        assert_eq!(mock.current_brake(), 150);
+
+        mock.set_brake(500).unwrap();
+        assert_eq!(mock.current_brake(), GAMEPAD_TRIGGER_MAX);
+
+        mock.set_combined_pedal(25000).unwrap();
+        assert_eq!(mock.current_combined_pedal(), 25000);
+
         // Centering check
         mock.center().unwrap();
         assert_eq!(mock.current_steering(), 0);
+        assert_eq!(mock.current_throttle(), 0);
+        assert_eq!(mock.current_brake(), 0);
+        assert_eq!(mock.current_combined_pedal(), 0);
 
         assert_eq!(mock.device_name(), VIRTUAL_GAMEPAD_NAME);
     }

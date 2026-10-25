@@ -5,3 +5,5 @@ pub mod device;
 pub mod launch;
 pub mod mapping;
 pub mod output;
+pub mod pedal;
+pub mod relative;

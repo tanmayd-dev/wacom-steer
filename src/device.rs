@@ -97,6 +97,55 @@ pub fn parse_hex_u16(s: &str) -> Option<u16> {
     u16::from_str_radix(s, 16).ok()
 }
 
+/// Parses a button name or code into an evdev KeyCode.
+///
+/// Supports common Wacom stylus buttons, ExpressKeys, and numeric/hex codes:
+/// - "btn_stylus", "stylus", "pen_button" -> KeyCode::BTN_STYLUS (0x14b)
+/// - "btn_stylus2", "stylus2" -> KeyCode::BTN_STYLUS2 (0x14c)
+/// - "btn_touch", "touch", "tip" -> KeyCode::BTN_TOUCH (0x14a)
+/// - "btn_0", "btn_1", ... "btn_9" -> KeyCode::BTN_0 .. KeyCode::BTN_9
+/// - "btn_south", "btn_a" -> KeyCode::BTN_SOUTH
+/// - "btn_east", "btn_b" -> KeyCode::BTN_EAST
+/// - "btn_north", "btn_x" -> KeyCode::BTN_NORTH
+/// - "btn_west", "btn_y" -> KeyCode::BTN_WEST
+/// - "btn_forward" -> KeyCode::BTN_FORWARD
+/// - "btn_back" -> KeyCode::BTN_BACK
+/// - Hex string (e.g. "0x14b") or decimal string (e.g. "331")
+pub fn parse_button_code(s: &str) -> Option<KeyCode> {
+    let trimmed = s.trim().to_lowercase();
+    match trimmed.as_str() {
+        "none" | "" => None,
+        "btn_stylus" | "stylus" | "pen_button" => Some(KeyCode::BTN_STYLUS),
+        "btn_stylus2" | "stylus2" => Some(KeyCode::BTN_STYLUS2),
+        "btn_touch" | "touch" | "tip" => Some(KeyCode::BTN_TOUCH),
+        "btn_0" | "0" => Some(KeyCode::BTN_0),
+        "btn_1" | "1" => Some(KeyCode::BTN_1),
+        "btn_2" | "2" => Some(KeyCode::BTN_2),
+        "btn_3" | "3" => Some(KeyCode::BTN_3),
+        "btn_4" | "4" => Some(KeyCode::BTN_4),
+        "btn_5" | "5" => Some(KeyCode::BTN_5),
+        "btn_6" | "6" => Some(KeyCode::BTN_6),
+        "btn_7" | "7" => Some(KeyCode::BTN_7),
+        "btn_8" | "8" => Some(KeyCode::BTN_8),
+        "btn_9" | "9" => Some(KeyCode::BTN_9),
+        "btn_forward" | "forward" => Some(KeyCode::BTN_FORWARD),
+        "btn_back" | "back" => Some(KeyCode::BTN_BACK),
+        "btn_south" | "btn_a" => Some(KeyCode::BTN_SOUTH),
+        "btn_east" | "btn_b" => Some(KeyCode::BTN_EAST),
+        "btn_north" | "btn_x" => Some(KeyCode::BTN_NORTH),
+        "btn_west" | "btn_y" => Some(KeyCode::BTN_WEST),
+        hex_or_dec => {
+            if hex_or_dec.starts_with("0x") || hex_or_dec.starts_with("0X") {
+                parse_hex_u16(hex_or_dec).map(KeyCode::new)
+            } else if let Ok(val) = hex_or_dec.parse::<u16>() {
+                Some(KeyCode::new(val))
+            } else {
+                parse_hex_u16(hex_or_dec).map(KeyCode::new)
+            }
+        }
+    }
+}
+
 /// Reads a single line from a sysfs file, trimmed.
 fn read_sysfs_string(path: &Path) -> Option<String> {
     fs::read_to_string(path).ok().map(|s| s.trim().to_string())
@@ -348,6 +397,22 @@ pub fn select_device(
     Ok(selected)
 }
 
+/// Finds a companion Pad device sharing the same tablet hardware as the given Pen device.
+pub fn find_companion_pad_device<'a>(
+    devices: &'a [WacomDeviceInfo],
+    pen_device: &WacomDeviceInfo,
+) -> Option<&'a WacomDeviceInfo> {
+    devices.iter().find(|d| {
+        if d.path == pen_device.path {
+            return false;
+        }
+        let same_vendor = d.vendor.is_some() && d.vendor == pen_device.vendor;
+        let same_product = d.product.is_some() && d.product == pen_device.product;
+        let is_pad_name = d.name.to_lowercase().contains("pad");
+        (same_vendor && same_product && is_pad_name) || (!d.has_pen_tool && is_pad_name)
+    })
+}
+
 /// Open an evdev input device in non-exclusive mode.
 ///
 /// NOTE: This function explicitly avoids calling `EVIOCGRAB`. The device remains
@@ -434,5 +499,55 @@ mod tests {
 
         let result = select_device(&devices, &filter);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_button_code() {
+        assert_eq!(parse_button_code("none"), None);
+        assert_eq!(parse_button_code(""), None);
+        assert_eq!(parse_button_code("btn_stylus"), Some(KeyCode::BTN_STYLUS));
+        assert_eq!(parse_button_code("stylus"), Some(KeyCode::BTN_STYLUS));
+        assert_eq!(parse_button_code("btn_stylus2"), Some(KeyCode::BTN_STYLUS2));
+        assert_eq!(parse_button_code("btn_0"), Some(KeyCode::BTN_0));
+        assert_eq!(parse_button_code("0x14b"), Some(KeyCode::BTN_STYLUS));
+        assert_eq!(parse_button_code("331"), Some(KeyCode::BTN_STYLUS));
+    }
+
+    #[test]
+    fn test_find_companion_pad_device() {
+        let pen = WacomDeviceInfo {
+            path: PathBuf::from("/dev/input/event7"),
+            sysfs_path: PathBuf::from("/sys/class/input/event7"),
+            name: "Wacom Intuos M Pen".to_string(),
+            vendor: Some(0x056a),
+            product: Some(0x0375),
+            bustype: Some(3),
+            version: Some(1),
+            x_axis: Some(AxisDetails::new(0, 21600, 4, 0, 100, 0)),
+            y_axis: Some(AxisDetails::new(0, 13500, 4, 0, 100, 0)),
+            has_pen_tool: true,
+            is_pen_device: true,
+            score: 280,
+        };
+
+        let pad = WacomDeviceInfo {
+            path: PathBuf::from("/dev/input/event8"),
+            sysfs_path: PathBuf::from("/sys/class/input/event8"),
+            name: "Wacom Intuos M Pad".to_string(),
+            vendor: Some(0x056a),
+            product: Some(0x0375),
+            bustype: Some(3),
+            version: Some(1),
+            x_axis: None,
+            y_axis: None,
+            has_pen_tool: false,
+            is_pen_device: false,
+            score: 50,
+        };
+
+        let devices = vec![pad.clone(), pen.clone()];
+        let found = find_companion_pad_device(&devices, &pen);
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().path, pad.path);
     }
 }

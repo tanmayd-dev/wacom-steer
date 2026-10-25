@@ -100,6 +100,36 @@ impl SteeringMapper {
         Self::new(input_range, AxisRange::new(-32767, 32767), config)
     }
 
+    /// Dynamically sets the tablet center position for recentering.
+    pub fn set_center(&mut self, new_center: f64) {
+        self.config.center = new_center.clamp(0.0, 1.0);
+    }
+
+    /// Returns the current center position.
+    pub fn current_center(&self) -> f64 {
+        self.config.center
+    }
+
+    /// Calculates raw pen deflection from center in [-1.0, 1.0].
+    pub fn calculate_deflection(&self, raw_x: i32) -> f64 {
+        let span = self.input_range.span();
+        let u = if span > 0.0 {
+            ((raw_x - self.input_range.min) as f64 / span).clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
+        let half_span = if self.config.half_span.abs() < 1e-9 {
+            1e-9
+        } else {
+            self.config.half_span
+        };
+        let mut offset = (u - self.config.center) / half_span;
+        if self.config.invert {
+            offset = -offset;
+        }
+        offset.clamp(-1.0, 1.0)
+    }
+
     /// Maps a normalized tablet position [0.0, 1.0] to normalized steering in [-1.0, 1.0].
     pub fn map_normalized(&self, normalized_x: f64) -> f64 {
         // Clamp raw normalized coordinate to tablet boundaries [0.0, 1.0]
@@ -319,5 +349,61 @@ mod tests {
             ..Default::default()
         };
         assert!(invalid_curve.validate().is_err());
+    }
+
+    #[test]
+    fn test_set_center_and_current_center() {
+        let mut mapper =
+            SteeringMapper::with_default_output(AxisRange::new(0, 20000), MappingConfig::default());
+        assert!(approx_eq(mapper.current_center(), 0.5));
+
+        mapper.set_center(0.75);
+        assert!(approx_eq(mapper.current_center(), 0.75));
+
+        // Clamping below 0.0
+        mapper.set_center(-0.2);
+        assert!(approx_eq(mapper.current_center(), 0.0));
+
+        // Clamping above 1.0
+        mapper.set_center(1.5);
+        assert!(approx_eq(mapper.current_center(), 1.0));
+    }
+
+    #[test]
+    fn test_calculate_deflection() {
+        let mapper =
+            SteeringMapper::with_default_output(AxisRange::new(0, 20000), MappingConfig::default());
+
+        // Center deflection should be 0.0
+        assert!(approx_eq(mapper.calculate_deflection(10000), 0.0));
+
+        // Right deflection
+        assert!(approx_eq(mapper.calculate_deflection(20000), 1.0));
+        assert!(approx_eq(mapper.calculate_deflection(15000), 0.5));
+
+        // Left deflection
+        assert!(approx_eq(mapper.calculate_deflection(0), -1.0));
+        assert!(approx_eq(mapper.calculate_deflection(5000), -0.5));
+
+        // Clamping beyond physical range
+        assert!(approx_eq(mapper.calculate_deflection(25000), 1.0));
+        assert!(approx_eq(mapper.calculate_deflection(-5000), -1.0));
+
+        // Inverted deflection
+        let mut invert_config = MappingConfig::default();
+        invert_config.invert = true;
+        let invert_mapper =
+            SteeringMapper::with_default_output(AxisRange::new(0, 20000), invert_config);
+        assert!(approx_eq(invert_mapper.calculate_deflection(10000), 0.0));
+        assert!(approx_eq(invert_mapper.calculate_deflection(20000), -1.0));
+        assert!(approx_eq(invert_mapper.calculate_deflection(0), 1.0));
+        assert!(approx_eq(invert_mapper.calculate_deflection(15000), -0.5));
+
+        // Dynamic center update changes deflection calculation
+        let mut dynamic_mapper =
+            SteeringMapper::with_default_output(AxisRange::new(0, 20000), MappingConfig::default());
+        dynamic_mapper.set_center(0.8);
+        assert!(approx_eq(dynamic_mapper.calculate_deflection(16000), 0.0));
+        assert!(approx_eq(dynamic_mapper.calculate_deflection(20000), 0.4)); // (1.0 - 0.8) / 0.5 = 0.4
     }
 }
