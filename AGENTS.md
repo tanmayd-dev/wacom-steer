@@ -15,10 +15,17 @@ The crate is organized into clean, single-responsibility modules:
   - Maps to virtual gamepad axis range $[-32767, 32767]$.
   - Fully covered by unit and integration tests.
 
-- **`src/output.rs`**: Output abstraction layer (`SteeringOutput` trait).
+- **`src/minecraft.rs`**: Minecraft camera aiming and relative mouse control module.
+  - Translates tablet coordinates into relative mouse motion (`REL_X`, `REL_Y`).
+  - Supports `Delta` mode (trackpad swipe with sub-pixel accumulation and proximity-lift baseline reset).
+  - Supports `Rate` mode (joystick deflection rate with resting deadzone and periodic timer ticks).
+  - Handles vertical pitch inversion and sensitivity scaling.
+
+- **`src/output.rs`**: Output abstraction layer (`SteeringOutput` and `MouseOutput` traits).
   - `UinputGamepad`: Linux `uinput` virtual device (`Wacom Steer Virtual Gamepad`). Uses standard Microsoft USB vendor/product IDs (`045e:028e`), standard buttons (`BTN_GAMEPAD`, `BTN_A`, `BTN_B`, `BTN_X`, `BTN_Y`, `BTN_SELECT`, `BTN_START`, `BTN_MODE`), and axes (`ABS_X`, `ABS_Y`, `ABS_RX`, `ABS_RY`).
-  - `MockGamepad`: In-memory implementation used for testing without `/dev/uinput` access.
-  - `DryRunGamepad`: Output sink for diagnostics that logs without device creation.
+  - `UinputMouse`: Linux `uinput` virtual device (`Wacom Steer Virtual Mouse`) emitting relative deltas (`REL_X`, `REL_Y`).
+  - `MockGamepad` / `MockMouse`: In-memory implementations used for testing without `/dev/uinput` access.
+  - `DryRunGamepad` / `DryRunMouse`: Output sinks for diagnostics that log without device creation.
 
 - **`src/device.rs`**: Wacom device discovery and passive reading.
   - Scans `/sys/class/input/event*` reading sysfs attributes (`device/name`, `device/id/vendor`, `device/id/product`).
@@ -42,8 +49,8 @@ The crate is organized into clean, single-responsibility modules:
 
 ## Critical Invariants & Constraints
 
-1. **Passive Reading Only (`No EVIOCGRAB`)**:
-   Under no circumstances should `EVIOCGRAB` be issued on the source Wacom device. The pen must continue to control the host desktop cursor normally.
+1. **Passive Reading by Default (`No EVIOCGRAB` for Gamepad Steering)**:
+   In standard steering / racing mode, under no circumstances should `EVIOCGRAB` be issued on the source Wacom device; the pen must continue to control the host desktop cursor normally. In `--minecraft` mode, `EVIOCGRAB` is intentionally acquired so that absolute tablet coordinates do not leak to the compositor / XWayland and cause camera spinning. Grab is cleanly released on exit.
 
 2. **No Real `/dev/uinput` in Ordinary Tests**:
    Unit and integration tests must never touch `/dev/uinput`. All testing of output behaviour must utilize `MockGamepad` or pure function interfaces.

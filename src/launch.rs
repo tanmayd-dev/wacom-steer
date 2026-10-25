@@ -13,9 +13,10 @@ use crate::device::{
     DeviceFilter, WacomDeviceInfo,
 };
 use crate::mapping::{AxisRange, SteeringMapper};
+use crate::minecraft::{MinecraftController, MinecraftStyle};
 use crate::output::{
-    SteeringOutput, UinputGamepad, GAMEPAD_AXIS_MAX, GAMEPAD_AXIS_MIN, GAMEPAD_TRIGGER_MAX,
-    VIRTUAL_GAMEPAD_NAME,
+    MouseOutput, SteeringOutput, UinputGamepad, UinputMouse, GAMEPAD_AXIS_MAX, GAMEPAD_AXIS_MIN,
+    GAMEPAD_TRIGGER_MAX, VIRTUAL_GAMEPAD_NAME, VIRTUAL_MOUSE_NAME,
 };
 use crate::pedal::{PedalMapper, PedalOutput};
 use crate::relative::RelativeSteering;
@@ -457,6 +458,153 @@ pub fn run_event_loop(
     Ok(())
 }
 
+/// Handles a single incoming event in Minecraft mode and emits relative mouse motion.
+pub fn handle_minecraft_event(
+    event: &InputEvent,
+    controller: &mut MinecraftController,
+    output: &mut impl MouseOutput,
+) -> io::Result<()> {
+    match event.event_type() {
+        EventType::KEY => {
+            let key = KeyCode::new(event.code());
+            if key == KeyCode::BTN_TOOL_PEN {
+                let in_proximity = event.value() != 0;
+                controller.set_proximity(in_proximity);
+                if in_proximity {
+                    log::debug!("Minecraft mode: Pen entered proximity");
+                } else {
+                    log::debug!("Minecraft mode: Pen lifted from tablet");
+                }
+            }
+        }
+        EventType::ABSOLUTE => {
+            let axis = AbsoluteAxisCode(event.code());
+            if axis == AbsoluteAxisCode::ABS_X {
+                let dx = controller.handle_raw_x(event.value());
+                if dx != 0 {
+                    output.emit_relative(dx, 0)?;
+                }
+            } else if axis == AbsoluteAxisCode::ABS_Y {
+                let dy = controller.handle_raw_y(event.value());
+                if dy != 0 {
+                    output.emit_relative(0, dy)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Main event polling loop forwarding Wacom events to virtual mouse output in Minecraft mode.
+pub fn run_minecraft_event_loop(
+    pen_device: &mut Device,
+    mut pad_device: Option<&mut Device>,
+    output: &mut impl MouseOutput,
+    mut controller: MinecraftController,
+    term_signal: Arc<AtomicBool>,
+) -> io::Result<()> {
+    // Acquire exclusive grab so absolute tablet coordinates do not leak to dwl/XWayland
+    pen_device.grab().map_err(|e| {
+        io::Error::other(format!(
+            "Failed to grab source pen device exclusively for Minecraft mode: {e}"
+        ))
+    })?;
+    log::info!("Acquired exclusive grab (EVIOCGRAB) on source pen device.");
+
+    let pen_fd = pen_device.as_raw_fd();
+    let pad_fd_opt = pad_device.as_ref().map(|d| d.as_raw_fd());
+
+    let mut pfds = vec![libc::pollfd {
+        fd: pen_fd,
+        events: libc::POLLIN,
+        revents: 0,
+    }];
+    if let Some(p_fd) = pad_fd_opt {
+        pfds.push(libc::pollfd {
+            fd: p_fd,
+            events: libc::POLLIN,
+            revents: 0,
+        });
+    }
+
+    let mut last_tick = std::time::Instant::now();
+
+    while !term_signal.load(Ordering::Relaxed) {
+        let ret = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, 10) };
+
+        if term_signal.load(Ordering::Relaxed) {
+            break;
+        }
+
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(last_tick).as_secs_f64();
+        last_tick = now;
+
+        if ret < 0 {
+            let err = io::Error::last_os_error();
+            if err.kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            log::error!("Poll error: {err}");
+            break;
+        }
+
+        if pfds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+            log::warn!("Primary input device disconnected or hung up");
+            break;
+        }
+
+        // Process incoming events from pen device
+        if pfds[0].revents & libc::POLLIN != 0 {
+            match pen_device.fetch_events() {
+                Ok(events) => {
+                    for ev in events {
+                        handle_minecraft_event(&ev, &mut controller, output)?;
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => {
+                    log::warn!("Pen device read error: {e}");
+                    break;
+                }
+            }
+        }
+
+        // Process companion pad events if any
+        if pfds.len() > 1 && (pfds[1].revents & libc::POLLIN != 0) {
+            if let Some(ref mut pad) = pad_device {
+                match pad.fetch_events() {
+                    Ok(events) => {
+                        for ev in events {
+                            handle_minecraft_event(&ev, &mut controller, output)?;
+                        }
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                    Err(e) => {
+                        log::warn!("Pad device read error: {e}");
+                    }
+                }
+            }
+        }
+
+        // In Rate mode: emit periodic integrated deflection deltas on each tick
+        if controller.config.style == MinecraftStyle::Rate {
+            let (dx, dy) = controller.tick_rate(dt);
+            if dx != 0 || dy != 0 {
+                output.emit_relative(dx, dy)?;
+            }
+        }
+    }
+
+    log::info!("Releasing exclusive grab on source pen device...");
+    if let Err(e) = pen_device.ungrab() {
+        log::warn!("Failed to ungrab pen device on exit: {e}");
+    }
+
+    Ok(())
+}
+
 /// Prints diagnostics and probe metadata for dry-run/probe mode.
 pub fn run_probe(
     config: &Config,
@@ -565,6 +713,29 @@ pub fn run_probe(
         println!("  Invert:      {}", config.pedal_invert);
     }
 
+    if config.minecraft.enabled {
+        println!();
+        println!("Active Minecraft Mode Configuration:");
+        println!("  Status:      ENABLED");
+        println!("  Style:       {}", config.minecraft.style);
+        println!("  Sensitivity: {:.2}", config.minecraft.sensitivity);
+        println!("  Deadzone:    {:.3}", config.minecraft.deadzone);
+        println!("  Invert Y:    {}", config.minecraft.invert_y);
+        println!(
+            "  Rate Speed:  {:.1} counts/sec",
+            config.minecraft.rate_speed
+        );
+        println!();
+        println!("Target Virtual Mouse Output:");
+        println!("  Name:        {}", VIRTUAL_MOUSE_NAME);
+        println!("  Axes:        REL_X, REL_Y (relative mouse aiming)");
+        println!("  Grabbing:    EVIOCGRAB (exclusive tablet ownership)");
+        println!("  Subsystem:   Linux uinput (userspace virtual mouse)");
+        println!("  Dry-run:     Active (virtual device creation was skipped)");
+        println!("============================================================");
+        return;
+    }
+
     println!();
     println!("Target Virtual Gamepad Output:");
     println!("  Name:        {}", VIRTUAL_GAMEPAD_NAME);
@@ -634,6 +805,70 @@ pub fn run(cli: CliArgs) -> Result<(), Box<dyn Error>> {
             selected.name
         ))
     })?;
+
+    if config.minecraft.enabled {
+        let y_axis = selected.y_axis.as_ref().ok_or_else(|| {
+            io::Error::other(format!(
+                "Selected device '{}' has no ABS_Y axis",
+                selected.name
+            ))
+        })?;
+        let mut controller = MinecraftController::new(
+            AxisRange::new(x_axis.min, x_axis.max),
+            AxisRange::new(y_axis.min, y_axis.max),
+            config.minecraft.clone(),
+        );
+
+        let mut source_dev = open_passive_device(&selected.path)?;
+
+        let initial_proximity = source_dev
+            .get_key_state()
+            .map(|k| k.contains(KeyCode::BTN_TOOL_PEN))
+            .unwrap_or(false);
+        controller.set_proximity(initial_proximity);
+
+        let mut pad_dev = if let Some(ref pad) = pad_companion {
+            match open_passive_device(&pad.path) {
+                Ok(d) => {
+                    log::info!("Opening companion Pad device: {}", pad.path.display());
+                    Some(d)
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Could not open companion Pad device '{}': {e}",
+                        pad.path.display()
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        log::info!("Initializing virtual mouse: '{}'...", VIRTUAL_MOUSE_NAME);
+        let mut mouse_output = UinputMouse::open()?;
+
+        let term_signal = Arc::new(AtomicBool::new(false));
+        signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term_signal))?;
+        signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term_signal))?;
+
+        log::info!(
+            "wacom-steer active in Minecraft mode. Bridging '{}' -> '{}'. Ready for Minecraft camera control.",
+            selected.name,
+            mouse_output.device_name()
+        );
+
+        run_minecraft_event_loop(
+            &mut source_dev,
+            pad_dev.as_mut(),
+            &mut mouse_output,
+            controller,
+            term_signal,
+        )?;
+
+        log::info!("Shutdown complete.");
+        return Ok(());
+    }
 
     let input_range = AxisRange::new(x_axis.min, x_axis.max);
     let mut mapper = SteeringMapper::with_default_output(input_range, config.mapping_config());
@@ -1052,5 +1287,51 @@ mod tests {
         )
         .unwrap();
         assert_eq!(mapper.current_center(), 0.5);
+    }
+
+    #[test]
+    fn test_handle_minecraft_event_delta() {
+        use crate::minecraft::MinecraftConfig;
+        use crate::output::MockMouse;
+
+        let mut mouse = MockMouse::new();
+        let mut controller = MinecraftController::new(
+            AxisRange::new(0, 20000),
+            AxisRange::new(0, 10000),
+            MinecraftConfig::default(),
+        );
+
+        // Pen enters proximity
+        let pen_down = InputEvent::new(EventType::KEY.0, KeyCode::BTN_TOOL_PEN.0, 1);
+        handle_minecraft_event(&pen_down, &mut controller, &mut mouse).unwrap();
+        assert!(controller.pen_in_proximity);
+
+        // Initial coordinates (seeds baseline)
+        let x_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 5000);
+        let y_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 5000);
+        handle_minecraft_event(&x_ev, &mut controller, &mut mouse).unwrap();
+        handle_minecraft_event(&y_ev, &mut controller, &mut mouse).unwrap();
+        assert_eq!(mouse.total_dx(), 0);
+        assert_eq!(mouse.total_dy(), 0);
+
+        // Movement right (+1000 raw counts * 0.04 = +40)
+        let x_move = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 6000);
+        handle_minecraft_event(&x_move, &mut controller, &mut mouse).unwrap();
+        assert_eq!(mouse.total_dx(), 40);
+
+        // Movement down (+500 raw counts * 0.04 = +20)
+        let y_move = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 5500);
+        handle_minecraft_event(&y_move, &mut controller, &mut mouse).unwrap();
+        assert_eq!(mouse.total_dy(), 20);
+
+        // Pen lifts away
+        let pen_up = InputEvent::new(EventType::KEY.0, KeyCode::BTN_TOOL_PEN.0, 0);
+        handle_minecraft_event(&pen_up, &mut controller, &mut mouse).unwrap();
+        assert!(!controller.pen_in_proximity);
+
+        // Movement while lifted should produce zero delta
+        let x_lifted = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 12000);
+        handle_minecraft_event(&x_lifted, &mut controller, &mut mouse).unwrap();
+        assert_eq!(mouse.total_dx(), 40);
     }
 }

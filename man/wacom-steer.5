@@ -84,6 +84,25 @@ Logging verbosity: \fI"trace"\fR, \fI"debug"\fR, \fI"info"\fR (default), \fI"war
 .TP
 .BI dry_run " (boolean)"
 When true, runs diagnostic probe mode without creating a virtual gamepad (default: false).
+.SS Minecraft Mode ([minecraft])
+.TP
+.BI enabled " (boolean)"
+When true, enables Minecraft camera aiming mode via a virtual relative mouse (default: false).
+.TP
+.BI style " (string)"
+Aiming style: \fI"delta"\fR (trackpad swipe, default) or \fI"rate"\fR (joystick deflection).
+.TP
+.BI sensitivity " (float)"
+Aiming sensitivity multiplier (> 0.0, default: 1.0).
+.TP
+.BI deadzone " (float)"
+Resting deadzone around center for rate mode in [0.0..1.0) (default: 0.05).
+.TP
+.BI invert_y " (boolean)"
+Invert vertical camera pitch (default: false).
+.TP
+.BI rate_speed " (float)"
+Base camera rotation speed in counts/sec for rate mode (default: 1200.0).
 .SH EXAMPLE
 .PP
 .nf
@@ -126,6 +145,15 @@ log_level = "info"
 
 # Dry run / probe mode
 dry_run = false
+
+# Minecraft camera aiming configuration
+[minecraft]
+enabled = false
+style = "delta"
+sensitivity = 1.0
+deadzone = 0.05
+invert_y = false
+rate_speed = 1200.0
 .fi
 .SH SEE ALSO
 .BR wacom-steer (1)

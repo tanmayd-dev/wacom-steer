@@ -38,3 +38,12 @@ log_level = "info"
 
 # Dry run / probe mode: when true, inspect device but do not create virtual gamepad
 dry_run = false
+
+# Minecraft camera aiming mode (creates virtual relative mouse)
+[minecraft]
+enabled = false
+style = "delta"
+sensitivity = 1.0
+deadzone = 0.05
+invert_y = false
+rate_speed = 1200.0

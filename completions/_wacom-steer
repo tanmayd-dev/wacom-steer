@@ -39,10 +39,16 @@ combined\:"Combined stick axis\: ABS_Y (forward = positive/throttle, backward = 
 '--pedal-curve=[Exponential curve factor for pedals (> 0.0, 1.0 = linear) (default\: 1.0)]:F:_default' \
 '--lift=[Pen lift behavior\: center or hold (default\: center)]:center|hold:((center\:"Center steering immediately when pen is lifted (default)"
 hold\:"Hold the last steering angle when pen is lifted"))' \
+'--minecraft-style=[Minecraft aiming style\: delta (trackpad swipe) or rate (joystick deflection) (default\: delta)]:delta|rate:((delta\:"Trackpad / swipe style\: stylus movement generates relative mouse deltas (default)"
+rate\:"Rate / joystick style\: stylus deflection away from center commands continuous rotation speed"))' \
+'--minecraft-sensitivity=[Aiming sensitivity multiplier for Minecraft mode (> 0.0, default\: 1.0)]:F:_default' \
+'--minecraft-deadzone=[Resting deadzone around tablet center for Minecraft rate mode \[0.0..1.0) (default\: 0.05)]:F:_default' \
 '--log-level=[Log level\: trace, debug, info, warn, error (default\: info)]:trace|debug|info|warn|error:(trace debug info warn error)' \
 '--completions=[Generate shell completion script and exit (e.g. zsh, bash, fish)]:SHELL:(bash elvish fish powershell zsh)' \
 '--invert[Invert steering direction]' \
 '--pedal-invert[Invert forward/backward pedal direction]' \
+'--minecraft[Enable Minecraft camera aiming mode (creates virtual relative mouse)]' \
+'--minecraft-invert-y[Invert vertical pitch in Minecraft mode (moving pen up looks down)]' \
 '--dry-run[Dry run / probe\: inspect devices and diagnostics, do not create virtual gamepad]' \
 '--print-config[Print effective configuration as TOML and exit]' \
 '--man[Display or export the roff man page and exit]' \

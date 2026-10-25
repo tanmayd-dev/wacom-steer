@@ -3,7 +3,7 @@
 use evdev::uinput::VirtualDevice;
 use evdev::{
     AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, EventType, InputEvent, InputId, KeyCode,
-    UinputAbsSetup,
+    RelativeAxisCode, UinputAbsSetup,
 };
 use std::io;
 
@@ -474,6 +474,193 @@ impl SteeringOutput for DryRunGamepad {
     }
 }
 
+/// Virtual mouse device name for Minecraft camera aiming.
+pub const VIRTUAL_MOUSE_NAME: &str = "Wacom Steer Virtual Mouse";
+
+/// Trait abstracting the relative mouse output device.
+pub trait MouseOutput: Send {
+    /// Emits relative mouse movement (dx, dy).
+    fn emit_relative(&mut self, dx: i32, dy: i32) -> io::Result<()>;
+
+    /// Name of the output device.
+    fn device_name(&self) -> &str;
+
+    /// Cumulative dx emitted.
+    fn total_dx(&self) -> i64;
+
+    /// Cumulative dy emitted.
+    fn total_dy(&self) -> i64;
+}
+
+/// Real uinput virtual mouse device.
+pub struct UinputMouse {
+    device: VirtualDevice,
+    total_dx: i64,
+    total_dy: i64,
+}
+
+impl UinputMouse {
+    /// Creates and configures the virtual mouse via `/dev/uinput`.
+    pub fn open() -> io::Result<Self> {
+        let mut keys = AttributeSet::<KeyCode>::new();
+        keys.insert(KeyCode::BTN_LEFT);
+        keys.insert(KeyCode::BTN_RIGHT);
+        keys.insert(KeyCode::BTN_MIDDLE);
+
+        let mut rel_axes = AttributeSet::<RelativeAxisCode>::new();
+        rel_axes.insert(RelativeAxisCode::REL_X);
+        rel_axes.insert(RelativeAxisCode::REL_Y);
+        rel_axes.insert(RelativeAxisCode::REL_WHEEL);
+
+        let device = VirtualDevice::builder()
+            .map_err(|e| io::Error::other(format!("Failed to initialize uinput: {e}")))?
+            .name(VIRTUAL_MOUSE_NAME)
+            .input_id(InputId::new(BusType::BUS_USB, 0x045e, 0x0040, 0x0111))
+            .with_keys(&keys)
+            .map_err(|e| io::Error::other(format!("Failed to set uinput mouse keys: {e}")))?
+            .with_relative_axes(&rel_axes)
+            .map_err(|e| io::Error::other(format!("Failed to set uinput relative axes: {e}")))?
+            .build()
+            .map_err(|e| {
+                io::Error::other(format!("Failed to build uinput virtual mouse device: {e}"))
+            })?;
+
+        Ok(Self {
+            device,
+            total_dx: 0,
+            total_dy: 0,
+        })
+    }
+}
+
+impl MouseOutput for UinputMouse {
+    fn emit_relative(&mut self, dx: i32, dy: i32) -> io::Result<()> {
+        if dx == 0 && dy == 0 {
+            return Ok(());
+        }
+        let mut events = Vec::with_capacity(2);
+        if dx != 0 {
+            events.push(InputEvent::new(
+                EventType::RELATIVE.0,
+                RelativeAxisCode::REL_X.0,
+                dx,
+            ));
+        }
+        if dy != 0 {
+            events.push(InputEvent::new(
+                EventType::RELATIVE.0,
+                RelativeAxisCode::REL_Y.0,
+                dy,
+            ));
+        }
+        self.device.emit(&events)?;
+        self.total_dx += dx as i64;
+        self.total_dy += dy as i64;
+        Ok(())
+    }
+
+    fn device_name(&self) -> &str {
+        VIRTUAL_MOUSE_NAME
+    }
+
+    fn total_dx(&self) -> i64 {
+        self.total_dx
+    }
+
+    fn total_dy(&self) -> i64 {
+        self.total_dy
+    }
+}
+
+/// In-memory mock mouse output for testing without accessing `/dev/uinput`.
+#[derive(Debug, Clone)]
+pub struct MockMouse {
+    pub name: String,
+    pub history: Vec<(i32, i32)>,
+    pub total_dx: i64,
+    pub total_dy: i64,
+}
+
+impl Default for MockMouse {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MockMouse {
+    pub fn new() -> Self {
+        Self {
+            name: VIRTUAL_MOUSE_NAME.to_string(),
+            history: Vec::new(),
+            total_dx: 0,
+            total_dy: 0,
+        }
+    }
+
+    pub fn events(&self) -> &[(i32, i32)] {
+        &self.history
+    }
+
+    pub fn clear(&mut self) {
+        self.history.clear();
+        self.total_dx = 0;
+        self.total_dy = 0;
+    }
+}
+
+impl MouseOutput for MockMouse {
+    fn emit_relative(&mut self, dx: i32, dy: i32) -> io::Result<()> {
+        if dx != 0 || dy != 0 {
+            self.history.push((dx, dy));
+            self.total_dx += dx as i64;
+            self.total_dy += dy as i64;
+        }
+        Ok(())
+    }
+
+    fn device_name(&self) -> &str {
+        &self.name
+    }
+
+    fn total_dx(&self) -> i64 {
+        self.total_dx
+    }
+
+    fn total_dy(&self) -> i64 {
+        self.total_dy
+    }
+}
+
+/// Dry-run mouse output for diagnostics without creating a uinput device.
+#[derive(Debug, Default)]
+pub struct DryRunMouse {
+    total_dx: i64,
+    total_dy: i64,
+}
+
+impl MouseOutput for DryRunMouse {
+    fn emit_relative(&mut self, dx: i32, dy: i32) -> io::Result<()> {
+        if dx != 0 || dy != 0 {
+            self.total_dx += dx as i64;
+            self.total_dy += dy as i64;
+            log::debug!("[DryRun] Virtual mouse REL_X={dx}, REL_Y={dy}");
+        }
+        Ok(())
+    }
+
+    fn device_name(&self) -> &str {
+        VIRTUAL_MOUSE_NAME
+    }
+
+    fn total_dx(&self) -> i64 {
+        self.total_dx
+    }
+
+    fn total_dy(&self) -> i64 {
+        self.total_dy
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,5 +722,28 @@ mod tests {
         assert!(!mock.is_btn_east_pressed());
 
         assert_eq!(mock.device_name(), VIRTUAL_GAMEPAD_NAME);
+    }
+
+    #[test]
+    fn test_mock_mouse_operations() {
+        let mut mouse = MockMouse::new();
+        assert_eq!(mouse.device_name(), VIRTUAL_MOUSE_NAME);
+        assert_eq!(mouse.total_dx(), 0);
+        assert_eq!(mouse.total_dy(), 0);
+        assert!(mouse.events().is_empty());
+
+        mouse.emit_relative(10, -5).unwrap();
+        assert_eq!(mouse.total_dx(), 10);
+        assert_eq!(mouse.total_dy(), -5);
+        assert_eq!(mouse.events(), &[(10, -5)]);
+
+        // Zero delta should not append event
+        mouse.emit_relative(0, 0).unwrap();
+        assert_eq!(mouse.events().len(), 1);
+
+        mouse.clear();
+        assert_eq!(mouse.total_dx(), 0);
+        assert_eq!(mouse.total_dy(), 0);
+        assert!(mouse.events().is_empty());
     }
 }

@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use crate::device::parse_hex_u16;
 pub use crate::mapping::MappingConfig;
+pub use crate::minecraft::{MinecraftConfig, MinecraftStyle};
 pub use crate::pedal::PedalConfig;
 pub use crate::relative::RelativeConfig;
 
@@ -196,6 +197,26 @@ pub struct CliArgs {
     #[arg(long, value_name = "center|hold")]
     pub lift: Option<LiftAction>,
 
+    /// Enable Minecraft camera aiming mode (creates virtual relative mouse)
+    #[arg(long)]
+    pub minecraft: bool,
+
+    /// Minecraft aiming style: delta (trackpad swipe) or rate (joystick deflection) (default: delta)
+    #[arg(long, value_name = "delta|rate")]
+    pub minecraft_style: Option<MinecraftStyle>,
+
+    /// Aiming sensitivity multiplier for Minecraft mode (> 0.0, default: 1.0)
+    #[arg(long, value_name = "F")]
+    pub minecraft_sensitivity: Option<f64>,
+
+    /// Resting deadzone around tablet center for Minecraft rate mode [0.0..1.0) (default: 0.05)
+    #[arg(long, value_name = "F")]
+    pub minecraft_deadzone: Option<f64>,
+
+    /// Invert vertical pitch in Minecraft mode (moving pen up looks down)
+    #[arg(long)]
+    pub minecraft_invert_y: bool,
+
     /// Log level: trace, debug, info, warn, error (default: info)
     #[arg(long, value_name = "trace|debug|info|warn|error")]
     pub log_level: Option<LogLevel>,
@@ -309,6 +330,8 @@ pub struct FileConfig {
     pub lift: Option<LiftAction>,
     pub log_level: Option<LogLevel>,
     pub dry_run: Option<bool>,
+    #[serde(default)]
+    pub minecraft: Option<MinecraftConfig>,
 }
 
 /// Fully resolved application configuration.
@@ -346,6 +369,8 @@ pub struct Config {
     pub lift: LiftAction,
     pub log_level: LogLevel,
     pub dry_run: bool,
+    #[serde(default)]
+    pub minecraft: MinecraftConfig,
 }
 
 impl Default for Config {
@@ -374,6 +399,7 @@ impl Default for Config {
             lift: LiftAction::Center,
             log_level: LogLevel::Info,
             dry_run: false,
+            minecraft: MinecraftConfig::default(),
         }
     }
 }
@@ -420,6 +446,10 @@ impl Config {
             self.pedal_config()
                 .validate()
                 .map_err(|e| format!("pedal_{e}"))?;
+        }
+
+        if self.minecraft.enabled {
+            self.minecraft.validate()?;
         }
         Ok(())
     }
@@ -493,6 +523,28 @@ impl Config {
             file_config.dry_run.unwrap_or(defaults.dry_run)
         };
 
+        let file_minecraft = file_config.minecraft.unwrap_or_default();
+        let minecraft_enabled = if cli.minecraft {
+            true
+        } else {
+            file_minecraft.enabled
+        };
+        let minecraft_invert_y = if cli.minecraft_invert_y {
+            true
+        } else {
+            file_minecraft.invert_y
+        };
+        let minecraft = MinecraftConfig {
+            enabled: minecraft_enabled,
+            style: cli.minecraft_style.unwrap_or(file_minecraft.style),
+            sensitivity: cli
+                .minecraft_sensitivity
+                .unwrap_or(file_minecraft.sensitivity),
+            deadzone: cli.minecraft_deadzone.unwrap_or(file_minecraft.deadzone),
+            invert_y: minecraft_invert_y,
+            rate_speed: file_minecraft.rate_speed,
+        };
+
         let config = Config {
             device: cli.device.clone().or(file_config.device),
             device_name: cli
@@ -561,6 +613,7 @@ impl Config {
                 .or(file_config.log_level)
                 .unwrap_or(defaults.log_level),
             dry_run,
+            minecraft,
         };
 
         config.validate()?;
@@ -594,6 +647,18 @@ impl From<&Config> for RelativeConfig {
 impl From<Config> for RelativeConfig {
     fn from(config: Config) -> Self {
         (&config).into()
+    }
+}
+
+impl From<&Config> for MinecraftConfig {
+    fn from(config: &Config) -> Self {
+        config.minecraft.clone()
+    }
+}
+
+impl From<Config> for MinecraftConfig {
+    fn from(config: Config) -> Self {
+        config.minecraft
     }
 }
 
@@ -662,6 +727,11 @@ mod tests {
             lift: Some(LiftAction::Center),
             log_level: None,
             dry_run: true,
+            minecraft: true,
+            minecraft_style: Some(MinecraftStyle::Rate),
+            minecraft_sensitivity: Some(1.5),
+            minecraft_deadzone: Some(0.08),
+            minecraft_invert_y: true,
             print_config: false,
             man: false,
             completions: None,
@@ -685,6 +755,11 @@ mod tests {
         assert!(resolved.pedal_invert);
         assert_eq!(resolved.lift, LiftAction::Center);
         assert!(resolved.dry_run);
+        assert!(resolved.minecraft.enabled);
+        assert_eq!(resolved.minecraft.style, MinecraftStyle::Rate);
+        assert_eq!(resolved.minecraft.sensitivity, 1.5);
+        assert_eq!(resolved.minecraft.deadzone, 0.08);
+        assert!(resolved.minecraft.invert_y);
     }
 
     #[test]
@@ -736,5 +811,31 @@ mod tests {
 
         let from_val: RelativeConfig = config.clone().into();
         assert_eq!(from_val, rel_cfg);
+    }
+
+    #[test]
+    fn test_minecraft_config_toml_parsing() {
+        let toml_str = r#"
+            device_name = "Wacom"
+            vendor = "056a"
+            product = "0375"
+
+            [minecraft]
+            enabled = true
+            style = "rate"
+            sensitivity = 1.8
+            deadzone = 0.08
+            invert_y = true
+            rate_speed = 1500.0
+        "#;
+        let file_cfg: FileConfig = toml::from_str(toml_str).unwrap();
+        assert!(file_cfg.minecraft.is_some());
+        let mc = file_cfg.minecraft.unwrap();
+        assert!(mc.enabled);
+        assert_eq!(mc.style, MinecraftStyle::Rate);
+        assert_eq!(mc.sensitivity, 1.8);
+        assert_eq!(mc.deadzone, 0.08);
+        assert!(mc.invert_y);
+        assert_eq!(mc.rate_speed, 1500.0);
     }
 }

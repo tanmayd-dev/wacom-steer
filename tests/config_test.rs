@@ -32,6 +32,11 @@ fn test_packaging_default_toml_matches_defaults() {
         pedal_curve: None,
         pedal_invert: false,
         lift: None,
+        minecraft: false,
+        minecraft_style: None,
+        minecraft_sensitivity: None,
+        minecraft_deadzone: None,
+        minecraft_invert_y: false,
         log_level: None,
         dry_run: false,
         print_config: false,
@@ -66,4 +71,5 @@ fn test_packaging_default_toml_matches_defaults() {
     assert_eq!(resolved.lift, expected.lift);
     assert_eq!(resolved.log_level, expected.log_level);
     assert_eq!(resolved.dry_run, expected.dry_run);
+    assert_eq!(resolved.minecraft, expected.minecraft);
 }

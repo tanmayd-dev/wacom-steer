@@ -4,6 +4,7 @@ pub mod config;
 pub mod device;
 pub mod launch;
 pub mod mapping;
+pub mod minecraft;
 pub mod output;
 pub mod pedal;
 pub mod relative;

@@ -20,7 +20,8 @@
   - Configurable central coasting deadzone, half-span travel, and sensitivity curve.
 - **Multi-Device Companion Polling**: Automatically discovers and passively polls both the primary Pen node and paired ExpressKey Pad node.
 - **Wine / Proton / SDL2 Ready**: Emulates an Xbox 360 controller (`045e:028e`) with standard buttons and axes recognized out-of-the-box by Wine, Proton, Steam, and SDL2.
-- **Safe Lifecycle**: Automatically centers steering and drops pedals to zero on pen lift (`--lift center`), source device disconnect, and shutdown signals (`SIGINT`/`SIGTERM`).
+- **Minecraft Mode**: Emulates a virtual relative mouse (`Wacom Steer Virtual Mouse`) and acquires exclusive device control (`EVIOCGRAB`) to solve the camera spinning glitch in Minecraft. Supports natural trackpad swipe (`delta`) and joystick deflection (`rate`) modes.
+- **Safe Lifecycle**: Automatically centers steering and drops pedals to zero on pen lift (`--lift center`), source device disconnect, and shutdown signals (`SIGINT`/`SIGTERM`). Cleanly releases device grabs on exit.
 - **Ease of Use & Shell Completions**: Built-in tab completion generator (`--completions zsh`) and pre-generated zsh completions.
 - **Probe / Diagnostics**: Built-in `--dry-run` to inspect connected devices, axis resolutions, and effective mapping parameters without creating a virtual device.
 
@@ -203,6 +204,18 @@ Target Virtual Gamepad Output:
   ```sh
   wacom-steer --lift hold
   ```
+- **Play Minecraft with Natural Tablet Aiming (Virtual Mouse)**:
+  ```sh
+  wacom-steer --minecraft
+  ```
+- **Minecraft Mode with Custom Sensitivity**:
+  ```sh
+  wacom-steer --minecraft --minecraft-sensitivity 1.5
+  ```
+- **Minecraft Mode with Joystick / Rate Deflection**:
+  ```sh
+  wacom-steer --minecraft --minecraft-style rate --minecraft-deadzone 0.08
+  ```
 
 ---
 
@@ -250,6 +263,15 @@ log_level = "info"
 
 # Dry run / probe mode
 dry_run = false
+
+# Minecraft camera aiming mode
+[minecraft]
+enabled = false            # Enable virtual mouse mode for Minecraft
+style = "delta"            # "delta" (trackpad swipe) or "rate" (joystick deflection)
+sensitivity = 1.0          # Aiming sensitivity multiplier
+deadzone = 0.05            # Center resting deadzone for rate mode
+invert_y = false           # Invert vertical pitch (look up/down)
+rate_speed = 1200.0        # Full-deflection speed in counts/sec for rate mode
 ```
 
 Print effective merged configuration:
@@ -287,6 +309,11 @@ Options:
       --pedal-curve <F>                        Exponential curve factor for pedals (default: 1.0)
       --pedal-invert                           Invert forward/backward pedal direction
       --lift <center|hold>                     Pen lift behavior: center or hold (default: center)
+      --minecraft                              Enable Minecraft camera aiming mode (creates virtual relative mouse)
+      --minecraft-style <delta|rate>           Minecraft aiming style: delta (trackpad swipe) or rate (joystick deflection) (default: delta)
+      --minecraft-sensitivity <F>              Aiming sensitivity multiplier for Minecraft mode (default: 1.0)
+      --minecraft-deadzone <F>                 Resting deadzone around tablet center for rate mode (default: 0.05)
+      --minecraft-invert-y                     Invert vertical pitch in Minecraft mode (moving pen up looks down)
       --log-level <trace|debug|info|warn|error> Log level (default: info)
       --completions <SHELL>                    Generate shell completion script and exit [bash, zsh, fish, ...]
       --man                                    Display or export the roff man page and exit

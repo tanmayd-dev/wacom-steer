@@ -123,6 +123,21 @@ Inverts pedal direction (forward becomes brake, backward becomes throttle).
 .BI \-\-lift " center|hold"
 Pen proximity behavior when stylus leaves the tablet surface. \fBcenter\fR (default) immediately zeroes steering and pedals for safety; \fBhold\fR maintains the last active values.
 .TP
+.B \-\-minecraft
+Enables Minecraft camera aiming mode. Creates a virtual relative mouse (\fIWacom Steer Virtual Mouse\fR) via /dev/uinput and takes exclusive ownership (\fIEVIOCGRAB\fR) of the tablet device to eliminate cursor jumping and camera spinning.
+.TP
+.BI \-\-minecraft\-style " delta|rate"
+Aiming style in Minecraft mode: \fBdelta\fR (trackpad swipe, default) or \fBrate\fR (joystick deflection rate).
+.TP
+.BI \-\-minecraft\-sensitivity " F"
+Aiming sensitivity multiplier for Minecraft mode (> 0.0, default: 1.0).
+.TP
+.BI \-\-minecraft\-deadzone " F"
+Resting deadzone around center for rate mode in [0.0..1.0) (default: 0.05).
+.TP
+.B \-\-minecraft\-invert\-y
+Inverts vertical pitch in Minecraft mode (moving pen up looks down).
+.TP
 .BI \-\-log\-level " trace|debug|info|warn|error"
 Logging verbosity level (default: info).
 .TP
