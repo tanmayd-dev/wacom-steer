@@ -32,11 +32,14 @@ fn test_packaging_default_toml_matches_defaults() {
         pedal_curve: None,
         pedal_invert: false,
         lift: None,
-        minecraft: false,
-        minecraft_style: None,
-        minecraft_sensitivity: None,
-        minecraft_deadzone: None,
-        minecraft_invert_y: false,
+        mode: None,
+        mouse: false,
+        pedal: false,
+        joystick: false,
+        mouse_style: None,
+        mouse_sensitivity: None,
+        mouse_deadzone: None,
+        mouse_invert_y: false,
         log_level: None,
         dry_run: false,
         print_config: false,
@@ -48,6 +51,7 @@ fn test_packaging_default_toml_matches_defaults() {
         Config::resolve(&cli).expect("Failed to resolve config with packaging/default.toml");
     let expected = Config::default();
 
+    assert_eq!(resolved.mode, expected.mode);
     assert_eq!(resolved.device, expected.device);
     assert_eq!(resolved.device_name, expected.device_name);
     assert_eq!(resolved.vendor, expected.vendor);
@@ -71,5 +75,5 @@ fn test_packaging_default_toml_matches_defaults() {
     assert_eq!(resolved.lift, expected.lift);
     assert_eq!(resolved.log_level, expected.log_level);
     assert_eq!(resolved.dry_run, expected.dry_run);
-    assert_eq!(resolved.minecraft, expected.minecraft);
+    assert_eq!(resolved.mouse, expected.mouse);
 }

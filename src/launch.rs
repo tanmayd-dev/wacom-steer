@@ -7,13 +7,15 @@ use std::os::fd::AsRawFd;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use crate::config::{CliArgs, Config, LiftAction, LogLevel, PedalMode, SteeringMode};
+use crate::config::{
+    CliArgs, Config, LiftAction, LogLevel, OperatingMode, PedalMode, SteeringMode,
+};
 use crate::device::{
     find_companion_pad_device, open_passive_device, parse_button_code, scan_devices, select_device,
     DeviceFilter, WacomDeviceInfo,
 };
 use crate::mapping::{AxisRange, SteeringMapper};
-use crate::minecraft::{MinecraftController, MinecraftStyle};
+use crate::mouse::{MouseController, MouseStyle};
 use crate::output::{
     MouseOutput, SteeringOutput, UinputGamepad, UinputMouse, GAMEPAD_AXIS_MAX, GAMEPAD_AXIS_MIN,
     GAMEPAD_TRIGGER_MAX, VIRTUAL_GAMEPAD_NAME, VIRTUAL_MOUSE_NAME,
@@ -34,6 +36,7 @@ pub struct SteeringState {
     pub last_raw_y: Option<i32>,
     pub default_center: f64,
     pub recenter_key: Option<KeyCode>,
+    pub is_pedal_only: bool,
 }
 
 impl SteeringState {
@@ -54,7 +57,14 @@ impl SteeringState {
             last_raw_y: None,
             default_center,
             recenter_key,
+            is_pedal_only: false,
         }
+    }
+
+    /// Sets whether this state is operating in dedicated pedal-only mode.
+    pub fn with_pedal_only(mut self, pedal_only: bool) -> Self {
+        self.is_pedal_only = pedal_only;
+        self
     }
 }
 
@@ -114,7 +124,9 @@ pub fn handle_event(
                 }
             } else if Some(key) == state.recenter_key && event.value() == 1 {
                 // Button pressed down
-                if state.pen_in_proximity {
+                if state.is_pedal_only {
+                    // In pedal-only mode, horizontal recentering is disabled
+                } else if state.pen_in_proximity {
                     if let Some(raw_x) = state.last_raw_x {
                         let span = mapper.input_range.span();
                         let u = if span > 0.0 {
@@ -154,7 +166,7 @@ pub fn handle_event(
             let axis = AbsoluteAxisCode(event.code());
             if axis == AbsoluteAxisCode::ABS_X && (state.pen_in_proximity || !state.has_pen_tool) {
                 state.last_raw_x = Some(event.value());
-                if steering_mode == SteeringMode::Absolute {
+                if !state.is_pedal_only && steering_mode == SteeringMode::Absolute {
                     let mapped = mapper.map_raw(event.value());
                     if mapped != state.current_steering {
                         output.set_steering(mapped)?;
@@ -336,7 +348,8 @@ pub fn run_event_loop(
 ) -> io::Result<()> {
     let recenter_key = parse_button_code(&config.recenter_button);
     let mut state =
-        SteeringState::new(has_pen_tool, initial_proximity, config.center, recenter_key);
+        SteeringState::new(has_pen_tool, initial_proximity, config.center, recenter_key)
+            .with_pedal_only(config.mode == OperatingMode::Pedal);
 
     let pen_fd = pen_device.as_raw_fd();
     let pad_fd_opt = pad_device.as_ref().map(|d| d.as_raw_fd());
@@ -431,7 +444,7 @@ pub fn run_event_loop(
         }
 
         // Update relative steering mode rate integration and auto-centering on each tick
-        if config.steering_mode == SteeringMode::Relative {
+        if config.mode != OperatingMode::Pedal && config.steering_mode == SteeringMode::Relative {
             if let Some(rel) = relative_steering.as_mut() {
                 let deflection = if state.pen_in_proximity || !state.has_pen_tool {
                     state
@@ -458,10 +471,10 @@ pub fn run_event_loop(
     Ok(())
 }
 
-/// Handles a single incoming event in Minecraft mode and emits relative mouse motion.
-pub fn handle_minecraft_event(
+/// Handles a single incoming event in Mouse mode and emits relative mouse motion.
+pub fn handle_mouse_event(
     event: &InputEvent,
-    controller: &mut MinecraftController,
+    controller: &mut MouseController,
     output: &mut impl MouseOutput,
 ) -> io::Result<()> {
     match event.event_type() {
@@ -471,9 +484,9 @@ pub fn handle_minecraft_event(
                 let in_proximity = event.value() != 0;
                 controller.set_proximity(in_proximity);
                 if in_proximity {
-                    log::debug!("Minecraft mode: Pen entered proximity");
+                    log::debug!("Mouse mode: Pen entered proximity");
                 } else {
-                    log::debug!("Minecraft mode: Pen lifted from tablet");
+                    log::debug!("Mouse mode: Pen lifted from tablet");
                 }
             }
         }
@@ -496,18 +509,21 @@ pub fn handle_minecraft_event(
     Ok(())
 }
 
-/// Main event polling loop forwarding Wacom events to virtual mouse output in Minecraft mode.
-pub fn run_minecraft_event_loop(
+/// Backwards compatibility alias for [`handle_mouse_event`].
+pub use handle_mouse_event as handle_minecraft_event;
+
+/// Main event polling loop forwarding Wacom events to virtual mouse output in Mouse mode.
+pub fn run_mouse_event_loop(
     pen_device: &mut Device,
     mut pad_device: Option<&mut Device>,
     output: &mut impl MouseOutput,
-    mut controller: MinecraftController,
+    mut controller: MouseController,
     term_signal: Arc<AtomicBool>,
 ) -> io::Result<()> {
     // Acquire exclusive grab so absolute tablet coordinates do not leak to dwl/XWayland
     pen_device.grab().map_err(|e| {
         io::Error::other(format!(
-            "Failed to grab source pen device exclusively for Minecraft mode: {e}"
+            "Failed to grab source pen device exclusively for Mouse mode: {e}"
         ))
     })?;
     log::info!("Acquired exclusive grab (EVIOCGRAB) on source pen device.");
@@ -560,7 +576,7 @@ pub fn run_minecraft_event_loop(
             match pen_device.fetch_events() {
                 Ok(events) => {
                     for ev in events {
-                        handle_minecraft_event(&ev, &mut controller, output)?;
+                        handle_mouse_event(&ev, &mut controller, output)?;
                     }
                 }
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -577,7 +593,7 @@ pub fn run_minecraft_event_loop(
                 match pad.fetch_events() {
                     Ok(events) => {
                         for ev in events {
-                            handle_minecraft_event(&ev, &mut controller, output)?;
+                            handle_mouse_event(&ev, &mut controller, output)?;
                         }
                     }
                     Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
@@ -589,7 +605,7 @@ pub fn run_minecraft_event_loop(
         }
 
         // In Rate mode: emit periodic integrated deflection deltas on each tick
-        if controller.config.style == MinecraftStyle::Rate {
+        if controller.config.style == MouseStyle::Rate {
             let (dx, dy) = controller.tick_rate(dt);
             if dx != 0 || dy != 0 {
                 output.emit_relative(dx, dy)?;
@@ -604,6 +620,9 @@ pub fn run_minecraft_event_loop(
 
     Ok(())
 }
+
+/// Backwards compatibility alias for [`run_mouse_event_loop`].
+pub use run_mouse_event_loop as run_minecraft_event_loop;
 
 /// Prints diagnostics and probe metadata for dry-run/probe mode.
 pub fn run_probe(
@@ -681,6 +700,56 @@ pub fn run_probe(
     }
 
     println!();
+    println!("Active Operating Mode: {}", config.mode);
+
+    if config.mode == OperatingMode::Mouse {
+        println!();
+        println!("Active Mouse Mode Configuration:");
+        println!("  Style:       {}", config.mouse.style);
+        println!("  Sensitivity: {:.2}", config.mouse.sensitivity);
+        println!("  Deadzone:    {:.3}", config.mouse.deadzone);
+        println!("  Invert Y:    {}", config.mouse.invert_y);
+        println!("  Rate Speed:  {:.1} counts/sec", config.mouse.rate_speed);
+        println!();
+        println!("Target Virtual Mouse Output:");
+        println!("  Name:        {}", VIRTUAL_MOUSE_NAME);
+        println!("  Axes:        REL_X, REL_Y (relative mouse aiming)");
+        println!("  Grabbing:    EVIOCGRAB (exclusive tablet ownership)");
+        println!("  Subsystem:   Linux uinput (userspace virtual mouse)");
+        println!("  Dry-run:     Active (virtual device creation was skipped)");
+        println!("============================================================");
+        return;
+    }
+
+    if config.mode == OperatingMode::Pedal {
+        println!();
+        println!("Active Pedal Configuration (Y-Axis):");
+        println!("  Mode:        {}", config.pedal_mode);
+        println!("  Center:      {:.3}", config.pedal_center);
+        println!("  Half-Span:   {:.3}", config.pedal_half_span);
+        println!("  Deadzone:    {:.3}", config.pedal_deadzone);
+        println!("  Curve:       {:.3}", config.pedal_curve);
+        println!("  Invert:      {}", config.pedal_invert);
+        println!();
+        println!("Target Virtual Gamepad Output (Pedal Mode):");
+        println!("  Name:        {}", VIRTUAL_GAMEPAD_NAME);
+        println!("  Steering:    ABS_X (locked to neutral center 0)");
+        if config.pedal_mode == PedalMode::Split {
+            println!("  Throttle:    ABS_RZ (range 0..{})", GAMEPAD_TRIGGER_MAX);
+            println!("  Brake:       ABS_Z (range 0..{})", GAMEPAD_TRIGGER_MAX);
+        } else if config.pedal_mode == PedalMode::Combined {
+            println!(
+                "  Pedals:      ABS_Y (range {}..{})",
+                GAMEPAD_AXIS_MIN, GAMEPAD_AXIS_MAX
+            );
+        }
+        println!("  Subsystem:   Linux uinput (userspace virtual gamepad)");
+        println!("  Dry-run:     Active (virtual device creation was skipped)");
+        println!("============================================================");
+        return;
+    }
+
+    println!();
     println!("Active Steering Configuration:");
     println!("  Mode:        {}", config.steering_mode);
     println!("  Center:      {:.3} (normalized)", config.center);
@@ -711,29 +780,6 @@ pub fn run_probe(
         println!("  Deadzone:    {:.3}", config.pedal_deadzone);
         println!("  Curve:       {:.3}", config.pedal_curve);
         println!("  Invert:      {}", config.pedal_invert);
-    }
-
-    if config.minecraft.enabled {
-        println!();
-        println!("Active Minecraft Mode Configuration:");
-        println!("  Status:      ENABLED");
-        println!("  Style:       {}", config.minecraft.style);
-        println!("  Sensitivity: {:.2}", config.minecraft.sensitivity);
-        println!("  Deadzone:    {:.3}", config.minecraft.deadzone);
-        println!("  Invert Y:    {}", config.minecraft.invert_y);
-        println!(
-            "  Rate Speed:  {:.1} counts/sec",
-            config.minecraft.rate_speed
-        );
-        println!();
-        println!("Target Virtual Mouse Output:");
-        println!("  Name:        {}", VIRTUAL_MOUSE_NAME);
-        println!("  Axes:        REL_X, REL_Y (relative mouse aiming)");
-        println!("  Grabbing:    EVIOCGRAB (exclusive tablet ownership)");
-        println!("  Subsystem:   Linux uinput (userspace virtual mouse)");
-        println!("  Dry-run:     Active (virtual device creation was skipped)");
-        println!("============================================================");
-        return;
     }
 
     println!();
@@ -806,17 +852,17 @@ pub fn run(cli: CliArgs) -> Result<(), Box<dyn Error>> {
         ))
     })?;
 
-    if config.minecraft.enabled {
+    if config.mode == OperatingMode::Mouse {
         let y_axis = selected.y_axis.as_ref().ok_or_else(|| {
             io::Error::other(format!(
                 "Selected device '{}' has no ABS_Y axis",
                 selected.name
             ))
         })?;
-        let mut controller = MinecraftController::new(
+        let mut controller = MouseController::new(
             AxisRange::new(x_axis.min, x_axis.max),
             AxisRange::new(y_axis.min, y_axis.max),
-            config.minecraft.clone(),
+            config.mouse.clone(),
         );
 
         let mut source_dev = open_passive_device(&selected.path)?;
@@ -853,12 +899,12 @@ pub fn run(cli: CliArgs) -> Result<(), Box<dyn Error>> {
         signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term_signal))?;
 
         log::info!(
-            "wacom-steer active in Minecraft mode. Bridging '{}' -> '{}'. Ready for Minecraft camera control.",
+            "wacom-steer active in Mouse mode. Bridging '{}' -> '{}'. Ready for relative mouse control.",
             selected.name,
             mouse_output.device_name()
         );
 
-        run_minecraft_event_loop(
+        run_mouse_event_loop(
             &mut source_dev,
             pad_dev.as_mut(),
             &mut mouse_output,
@@ -880,11 +926,12 @@ pub fn run(cli: CliArgs) -> Result<(), Box<dyn Error>> {
         .unwrap_or_else(|| AxisRange::new(0, 1));
     let pedal_mapper = PedalMapper::new(y_range, config.pedal_config());
 
-    let relative_steering = if config.steering_mode == SteeringMode::Relative {
-        Some(RelativeSteering::new(config.relative_config()))
-    } else {
-        None
-    };
+    let relative_steering =
+        if config.mode != OperatingMode::Pedal && config.steering_mode == SteeringMode::Relative {
+            Some(RelativeSteering::new(config.relative_config()))
+        } else {
+            None
+        };
 
     log::info!(
         "Opening source device passively: {}",
@@ -928,11 +975,19 @@ pub fn run(cli: CliArgs) -> Result<(), Box<dyn Error>> {
     signal_hook::flag::register(signal_hook::consts::SIGINT, Arc::clone(&term_signal))?;
     signal_hook::flag::register(signal_hook::consts::SIGTERM, Arc::clone(&term_signal))?;
 
-    log::info!(
-        "wacom-steer active. Bridging '{}' -> '{}'. Ready for gamepad inputs / Wine / Proton.",
-        selected.name,
-        output.device_name()
-    );
+    if config.mode == OperatingMode::Pedal {
+        log::info!(
+            "wacom-steer active in Pedal mode. Bridging '{}' -> '{}'. Ready for pedal inputs.",
+            selected.name,
+            output.device_name()
+        );
+    } else {
+        log::info!(
+            "wacom-steer active in Joystick mode. Bridging '{}' -> '{}'. Ready for gamepad inputs / Wine / Proton.",
+            selected.name,
+            output.device_name()
+        );
+    }
 
     run_event_loop(
         &mut source_dev,
@@ -1290,48 +1345,108 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_minecraft_event_delta() {
-        use crate::minecraft::MinecraftConfig;
+    fn test_handle_mouse_event_delta() {
+        use crate::mouse::MouseConfig;
         use crate::output::MockMouse;
 
         let mut mouse = MockMouse::new();
-        let mut controller = MinecraftController::new(
+        let mut controller = MouseController::new(
             AxisRange::new(0, 20000),
             AxisRange::new(0, 10000),
-            MinecraftConfig::default(),
+            MouseConfig::default(),
         );
 
         // Pen enters proximity
         let pen_down = InputEvent::new(EventType::KEY.0, KeyCode::BTN_TOOL_PEN.0, 1);
-        handle_minecraft_event(&pen_down, &mut controller, &mut mouse).unwrap();
+        handle_mouse_event(&pen_down, &mut controller, &mut mouse).unwrap();
         assert!(controller.pen_in_proximity);
 
         // Initial coordinates (seeds baseline)
         let x_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 5000);
         let y_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 5000);
-        handle_minecraft_event(&x_ev, &mut controller, &mut mouse).unwrap();
-        handle_minecraft_event(&y_ev, &mut controller, &mut mouse).unwrap();
+        handle_mouse_event(&x_ev, &mut controller, &mut mouse).unwrap();
+        handle_mouse_event(&y_ev, &mut controller, &mut mouse).unwrap();
         assert_eq!(mouse.total_dx(), 0);
         assert_eq!(mouse.total_dy(), 0);
 
         // Movement right (+1000 raw counts * 0.04 = +40)
         let x_move = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 6000);
-        handle_minecraft_event(&x_move, &mut controller, &mut mouse).unwrap();
+        handle_mouse_event(&x_move, &mut controller, &mut mouse).unwrap();
         assert_eq!(mouse.total_dx(), 40);
 
         // Movement down (+500 raw counts * 0.04 = +20)
         let y_move = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 5500);
-        handle_minecraft_event(&y_move, &mut controller, &mut mouse).unwrap();
+        handle_mouse_event(&y_move, &mut controller, &mut mouse).unwrap();
         assert_eq!(mouse.total_dy(), 20);
 
         // Pen lifts away
         let pen_up = InputEvent::new(EventType::KEY.0, KeyCode::BTN_TOOL_PEN.0, 0);
-        handle_minecraft_event(&pen_up, &mut controller, &mut mouse).unwrap();
+        handle_mouse_event(&pen_up, &mut controller, &mut mouse).unwrap();
         assert!(!controller.pen_in_proximity);
 
         // Movement while lifted should produce zero delta
         let x_lifted = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 12000);
-        handle_minecraft_event(&x_lifted, &mut controller, &mut mouse).unwrap();
+        handle_mouse_event(&x_lifted, &mut controller, &mut mouse).unwrap();
         assert_eq!(mouse.total_dx(), 40);
+    }
+
+    #[test]
+    fn test_handle_event_pedal_only_mode() {
+        let mut mock = MockGamepad::new();
+        let mut mapper = SteeringMapper::with_default_output(
+            AxisRange::new(0, 20000),
+            crate::mapping::MappingConfig::default(),
+        );
+        let pedal_mapper = PedalMapper::new(AxisRange::new(0, 10000), PedalConfig::default());
+        let mut rel_opt = None;
+        let mut state = SteeringState::new(true, true, 0.5, None).with_pedal_only(true);
+
+        // In pedal mode, X movements must NOT affect steering output (remains 0)
+        let x_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 18000);
+        handle_event(
+            &x_ev,
+            &mut state,
+            &mut mapper,
+            &pedal_mapper,
+            &mut rel_opt,
+            &mut mock,
+            LiftAction::Center,
+            SteeringMode::Absolute,
+        )
+        .unwrap();
+        assert_eq!(mock.current_steering(), 0);
+
+        // Y movement pushes forward into throttle
+        let y_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 2000);
+        handle_event(
+            &y_ev,
+            &mut state,
+            &mut mapper,
+            &pedal_mapper,
+            &mut rel_opt,
+            &mut mock,
+            LiftAction::Center,
+            SteeringMode::Absolute,
+        )
+        .unwrap();
+        assert!(mock.current_throttle() > 0);
+        assert_eq!(mock.current_steering(), 0);
+
+        // Pen lift centers pedal outputs
+        let pen_up = InputEvent::new(EventType::KEY.0, KeyCode::BTN_TOOL_PEN.0, 0);
+        handle_event(
+            &pen_up,
+            &mut state,
+            &mut mapper,
+            &pedal_mapper,
+            &mut rel_opt,
+            &mut mock,
+            LiftAction::Center,
+            SteeringMode::Absolute,
+        )
+        .unwrap();
+        assert_eq!(mock.current_throttle(), 0);
+        assert_eq!(mock.current_brake(), 0);
+        assert_eq!(mock.current_steering(), 0);
     }
 }

@@ -1,12 +1,15 @@
 # Default configuration for wacom-steer
 # Copy or symlink to ~/.config/wacom-steer/config.toml
 
+# Operating mode: "joystick" (default), "mouse", or "pedal"
+mode = "joystick"
+
 # Device matching parameters
 device_name = "Wacom"
 vendor = "056a"
 product = "0375"
 
-# Steering mapping parameters
+# Steering mapping parameters (Joystick mode X-Axis)
 steering_mode = "absolute"
 center = 0.5
 half_span = 0.5
@@ -39,8 +42,8 @@ log_level = "info"
 # Dry run / probe mode: when true, inspect device but do not create virtual gamepad
 dry_run = false
 
-# Minecraft camera aiming mode (creates virtual relative mouse)
-[minecraft]
+# Relative mouse camera aiming mode (creates virtual relative mouse)
+[mouse]
 enabled = false
 style = "delta"
 sensitivity = 1.0

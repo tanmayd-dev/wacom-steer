@@ -1,4 +1,4 @@
-//! Minecraft camera control mode mapping tablet input to virtual relative mouse movement.
+//! Relative mouse control mode mapping tablet input to virtual relative mouse movement (for camera aiming in 3D games and trackpad navigation).
 
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use crate::mapping::AxisRange;
 /// Control scheme for translation of tablet coordinates to mouse movement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "lowercase")]
-pub enum MinecraftStyle {
+pub enum MouseStyle {
     /// Trackpad / swipe style: stylus movement generates relative mouse deltas (default).
     #[default]
     Delta,
@@ -16,7 +16,7 @@ pub enum MinecraftStyle {
     Rate,
 }
 
-impl std::fmt::Display for MinecraftStyle {
+impl std::fmt::Display for MouseStyle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Delta => write!(f, "delta"),
@@ -25,13 +25,17 @@ impl std::fmt::Display for MinecraftStyle {
     }
 }
 
-/// Configuration parameters for Minecraft mode.
+/// Backwards compatibility alias for [`MouseStyle`].
+pub type MinecraftStyle = MouseStyle;
+
+/// Configuration parameters for mouse mode.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct MinecraftConfig {
-    /// Whether Minecraft mode is active.
+pub struct MouseConfig {
+    /// Whether mouse mode is active (deprecated: prefer `Config::mode`).
+    #[serde(default)]
     pub enabled: bool,
     /// Control style (Delta or Rate).
-    pub style: MinecraftStyle,
+    pub style: MouseStyle,
     /// Aiming sensitivity multiplier (> 0.0). Default is 1.0.
     pub sensitivity: f64,
     /// Resting deadzone around tablet center for Rate mode in [0.0, 1.0). Default is 0.05.
@@ -42,11 +46,11 @@ pub struct MinecraftConfig {
     pub rate_speed: f64,
 }
 
-impl Default for MinecraftConfig {
+impl Default for MouseConfig {
     fn default() -> Self {
         Self {
             enabled: false,
-            style: MinecraftStyle::Delta,
+            style: MouseStyle::Delta,
             sensitivity: 1.0,
             deadzone: 0.05,
             invert_y: false,
@@ -55,24 +59,24 @@ impl Default for MinecraftConfig {
     }
 }
 
-impl MinecraftConfig {
+impl MouseConfig {
     /// Validates the configuration parameters.
     pub fn validate(&self) -> Result<(), String> {
         if self.sensitivity <= 0.0 {
             return Err(format!(
-                "minecraft sensitivity must be > 0.0, got {}",
+                "mouse sensitivity must be > 0.0, got {}",
                 self.sensitivity
             ));
         }
         if !(0.0..1.0).contains(&self.deadzone) {
             return Err(format!(
-                "minecraft deadzone must be in [0.0, 1.0), got {}",
+                "mouse deadzone must be in [0.0, 1.0), got {}",
                 self.deadzone
             ));
         }
         if self.rate_speed <= 0.0 {
             return Err(format!(
-                "minecraft rate_speed must be > 0.0, got {}",
+                "mouse rate_speed must be > 0.0, got {}",
                 self.rate_speed
             ));
         }
@@ -80,17 +84,20 @@ impl MinecraftConfig {
     }
 }
 
+/// Backwards compatibility alias for [`MouseConfig`].
+pub type MinecraftConfig = MouseConfig;
+
 /// Base scaling factor converting raw high-resolution tablet counts to standard mouse counts in Delta mode.
 /// Tablet resolutions are typically 100 counts/mm (2540 LPI), whereas standard mice are ~30-60 counts/mm.
-/// 0.04 maps a full stroke on an Intuos M (21600 units) to ~864 mouse counts (~360-degree turn in Minecraft at 100% sens).
+/// 0.04 maps a full stroke on an Intuos M (21600 units) to ~864 mouse counts (~360-degree turn in 3D games at 100% sens).
 pub const DEFAULT_DELTA_SCALE: f64 = 0.04;
 
-/// Controller managing tablet-to-mouse translation for Minecraft camera aiming.
+/// Controller managing tablet-to-mouse translation for camera aiming and cursor navigation.
 #[derive(Debug, Clone)]
-pub struct MinecraftController {
+pub struct MouseController {
     pub x_range: AxisRange,
     pub y_range: AxisRange,
-    pub config: MinecraftConfig,
+    pub config: MouseConfig,
 
     pub pen_in_proximity: bool,
     pub last_raw_x: Option<i32>,
@@ -100,9 +107,12 @@ pub struct MinecraftController {
     accum_y: f64,
 }
 
-impl MinecraftController {
+/// Backwards compatibility alias for [`MouseController`].
+pub type MinecraftController = MouseController;
+
+impl MouseController {
     /// Creates a new controller for the specified tablet ranges and configuration.
-    pub fn new(x_range: AxisRange, y_range: AxisRange, config: MinecraftConfig) -> Self {
+    pub fn new(x_range: AxisRange, y_range: AxisRange, config: MouseConfig) -> Self {
         Self {
             x_range,
             y_range,
@@ -145,7 +155,7 @@ impl MinecraftController {
 
         self.last_raw_x = Some(raw_x);
 
-        if self.config.style == MinecraftStyle::Delta {
+        if self.config.style == MouseStyle::Delta {
             let raw_dx = (raw_x - prev) as f64;
             self.accum_x += raw_dx * DEFAULT_DELTA_SCALE * self.config.sensitivity;
             let emit_dx = self.accum_x.trunc() as i32;
@@ -174,10 +184,10 @@ impl MinecraftController {
 
         self.last_raw_y = Some(raw_y);
 
-        if self.config.style == MinecraftStyle::Delta {
+        if self.config.style == MouseStyle::Delta {
             // Note: Tablet Y=0 is top, max is bottom.
             // Moving pen up decreases raw_y (raw_dy < 0).
-            // In standard mouse coords, negative REL_Y pitches view up in Minecraft.
+            // In standard mouse coords, negative REL_Y pitches view up.
             // Thus, raw_dy directly matches mouse REL_Y.
             let raw_dy = (raw_y - prev) as f64;
             let oriented_dy = if self.config.invert_y {
@@ -198,7 +208,7 @@ impl MinecraftController {
     /// Computes relative mouse motion on each periodic timer tick for Rate mode.
     /// Returns `(dx, dy)` to be emitted this tick.
     pub fn tick_rate(&mut self, dt_seconds: f64) -> (i32, i32) {
-        if self.config.style != MinecraftStyle::Rate || !self.pen_in_proximity {
+        if self.config.style != MouseStyle::Rate || !self.pen_in_proximity {
             return (0, 0);
         }
 
@@ -261,33 +271,33 @@ mod tests {
 
     #[test]
     fn test_default_config_validation() {
-        let cfg = MinecraftConfig::default();
+        let cfg = MouseConfig::default();
         assert!(cfg.validate().is_ok());
-        assert_eq!(cfg.style, MinecraftStyle::Delta);
+        assert_eq!(cfg.style, MouseStyle::Delta);
         assert!(!cfg.enabled);
     }
 
     #[test]
     fn test_config_validation_failures() {
-        let mut cfg = MinecraftConfig::default();
+        let mut cfg = MouseConfig::default();
         cfg.sensitivity = 0.0;
         assert!(cfg.validate().is_err());
 
-        let mut cfg = MinecraftConfig::default();
+        let mut cfg = MouseConfig::default();
         cfg.deadzone = 1.0;
         assert!(cfg.validate().is_err());
 
-        let mut cfg = MinecraftConfig::default();
+        let mut cfg = MouseConfig::default();
         cfg.rate_speed = -10.0;
         assert!(cfg.validate().is_err());
     }
 
     #[test]
     fn test_delta_mode_continuous_tracking() {
-        let mut controller = MinecraftController::new(
+        let mut controller = MouseController::new(
             AxisRange::new(0, 20000),
             AxisRange::new(0, 10000),
-            MinecraftConfig::default(),
+            MouseConfig::default(),
         );
 
         controller.set_proximity(true);
@@ -311,10 +321,10 @@ mod tests {
 
     #[test]
     fn test_delta_mode_proximity_lift_resets_baseline() {
-        let mut controller = MinecraftController::new(
+        let mut controller = MouseController::new(
             AxisRange::new(0, 20000),
             AxisRange::new(0, 10000),
-            MinecraftConfig::default(),
+            MouseConfig::default(),
         );
 
         controller.set_proximity(true);
@@ -340,11 +350,11 @@ mod tests {
 
     #[test]
     fn test_delta_mode_invert_y() {
-        let mut cfg = MinecraftConfig::default();
+        let mut cfg = MouseConfig::default();
         cfg.invert_y = true;
 
         let mut controller =
-            MinecraftController::new(AxisRange::new(0, 20000), AxisRange::new(0, 10000), cfg);
+            MouseController::new(AxisRange::new(0, 20000), AxisRange::new(0, 10000), cfg);
 
         controller.set_proximity(true);
         controller.handle_raw_y(5000);
@@ -356,14 +366,14 @@ mod tests {
 
     #[test]
     fn test_rate_mode_deflection_and_deadzone() {
-        let mut cfg = MinecraftConfig::default();
-        cfg.style = MinecraftStyle::Rate;
+        let mut cfg = MouseConfig::default();
+        cfg.style = MouseStyle::Rate;
         cfg.deadzone = 0.1;
         cfg.rate_speed = 1000.0;
         cfg.sensitivity = 1.0;
 
         let mut controller =
-            MinecraftController::new(AxisRange::new(0, 10000), AxisRange::new(0, 10000), cfg);
+            MouseController::new(AxisRange::new(0, 10000), AxisRange::new(0, 10000), cfg);
 
         controller.set_proximity(true);
 

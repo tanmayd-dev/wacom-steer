@@ -121,3 +121,80 @@ fn test_integration_pedal_combined() {
     assert_eq!(mock.current_combined_pedal(), 32767);
     assert!(mock.is_btn_east_pressed());
 }
+
+#[test]
+fn test_integration_pedal_only_mode() {
+    let mut mock = MockGamepad::new();
+    let mut mapper =
+        SteeringMapper::with_default_output(AxisRange::new(0, 20000), MappingConfig::default());
+
+    let mut p_cfg = PedalConfig::default();
+    p_cfg.mode = PedalMode::Split;
+    let pedal_mapper = PedalMapper::new(AxisRange::new(0, 10000), p_cfg);
+
+    let mut rel_opt = None;
+    // Activate pedal-only mode
+    let mut state = SteeringState::new(true, true, 0.5, None).with_pedal_only(true);
+
+    // 1. Extreme X movement should NOT change steering (steering must remain 0)
+    let x_left = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 0);
+    handle_event(
+        &x_left,
+        &mut state,
+        &mut mapper,
+        &pedal_mapper,
+        &mut rel_opt,
+        &mut mock,
+        LiftAction::Center,
+        SteeringMode::Absolute,
+    )
+    .unwrap();
+    assert_eq!(mock.current_steering(), 0);
+
+    let x_right = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_X.0, 20000);
+    handle_event(
+        &x_right,
+        &mut state,
+        &mut mapper,
+        &pedal_mapper,
+        &mut rel_opt,
+        &mut mock,
+        LiftAction::Center,
+        SteeringMode::Absolute,
+    )
+    .unwrap();
+    assert_eq!(mock.current_steering(), 0);
+
+    // 2. Y movement controls pedals
+    let forward_ev = InputEvent::new(EventType::ABSOLUTE.0, AbsoluteAxisCode::ABS_Y.0, 1000);
+    handle_event(
+        &forward_ev,
+        &mut state,
+        &mut mapper,
+        &pedal_mapper,
+        &mut rel_opt,
+        &mut mock,
+        LiftAction::Center,
+        SteeringMode::Absolute,
+    )
+    .unwrap();
+    assert!(mock.current_throttle() > 0);
+    assert_eq!(mock.current_steering(), 0);
+
+    // 3. Proximity lift centers pedals
+    let pen_up = InputEvent::new(EventType::KEY.0, KeyCode::BTN_TOOL_PEN.0, 0);
+    handle_event(
+        &pen_up,
+        &mut state,
+        &mut mapper,
+        &pedal_mapper,
+        &mut rel_opt,
+        &mut mock,
+        LiftAction::Center,
+        SteeringMode::Absolute,
+    )
+    .unwrap();
+    assert_eq!(mock.current_throttle(), 0);
+    assert_eq!(mock.current_brake(), 0);
+    assert_eq!(mock.current_steering(), 0);
+}

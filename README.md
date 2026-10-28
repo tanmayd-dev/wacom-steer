@@ -20,7 +20,10 @@
   - Configurable central coasting deadzone, half-span travel, and sensitivity curve.
 - **Multi-Device Companion Polling**: Automatically discovers and passively polls both the primary Pen node and paired ExpressKey Pad node.
 - **Wine / Proton / SDL2 Ready**: Emulates an Xbox 360 controller (`045e:028e`) with standard buttons and axes recognized out-of-the-box by Wine, Proton, Steam, and SDL2.
-- **Minecraft Mode**: Emulates a virtual relative mouse (`Wacom Steer Virtual Mouse`) and acquires exclusive device control (`EVIOCGRAB`) to solve the camera spinning glitch in Minecraft. Supports natural trackpad swipe (`delta`) and joystick deflection (`rate`) modes.
+- **Three Dedicated Operating Modes (`--mode <MODE>`)**:
+  - **Joystick Mode** *(default)*: Emulates an Xbox 360 gamepad with analog steering on X, optional pedals on Y, and ExpressKey buttons.
+  - **Mouse Mode** (`--mouse`): Emulates a virtual relative mouse (`Wacom Steer Virtual Mouse`) and acquires exclusive device control (`EVIOCGRAB`) for camera aiming in 3D games (Minecraft, FPS) and relative trackpad navigation. Supports natural trackpad swipe (`delta`) and joystick deflection (`rate`) styles.
+  - **Pedal Mode** (`--pedal`): Turns the tablet into a dedicated accelerator & brake pedal unit on the Y-axis, keeping horizontal steering neutral ($0$) for use alongside physical racing wheels, flight sticks, or keyboards.
 - **Safe Lifecycle**: Automatically centers steering and drops pedals to zero on pen lift (`--lift center`), source device disconnect, and shutdown signals (`SIGINT`/`SIGTERM`). Cleanly releases device grabs on exit.
 - **Ease of Use & Shell Completions**: Built-in tab completion generator (`--completions zsh`) and pre-generated zsh completions.
 - **Probe / Diagnostics**: Built-in `--dry-run` to inspect connected devices, axis resolutions, and effective mapping parameters without creating a virtual device.
@@ -180,9 +183,25 @@ Target Virtual Gamepad Output:
 
 ### Common Tuning Examples
 
-- **Enable Acceleration & Braking on Stylus Y-Axis (Triggers)**:
+- **Switch to Relative Mouse Camera Mode (e.g. Minecraft / FPS)**:
   ```sh
-  wacom-steer --pedal-mode split --pedal-deadzone 0.08
+  wacom-steer --mouse
+  ```
+- **Mouse Mode with Custom Sensitivity**:
+  ```sh
+  wacom-steer --mouse --mouse-sensitivity 1.5
+  ```
+- **Mouse Mode with Joystick / Rate Deflection**:
+  ```sh
+  wacom-steer --mouse --mouse-style rate --mouse-deadzone 0.08
+  ```
+- **Dedicated Pedal Mode (Tablet as Throttle & Brake, Steering Locked to 0)**:
+  ```sh
+  wacom-steer --pedal
+  ```
+- **Enable Acceleration & Braking on Stylus Y-Axis in Joystick Mode**:
+  ```sh
+  wacom-steer --mode joystick --pedal-mode split --pedal-deadzone 0.08
   ```
 - **Enable Relative / Steering Wheel Rate Mode**:
   ```sh
@@ -204,18 +223,6 @@ Target Virtual Gamepad Output:
   ```sh
   wacom-steer --lift hold
   ```
-- **Play Minecraft with Natural Tablet Aiming (Virtual Mouse)**:
-  ```sh
-  wacom-steer --minecraft
-  ```
-- **Minecraft Mode with Custom Sensitivity**:
-  ```sh
-  wacom-steer --minecraft --minecraft-sensitivity 1.5
-  ```
-- **Minecraft Mode with Joystick / Rate Deflection**:
-  ```sh
-  wacom-steer --minecraft --minecraft-style rate --minecraft-deadzone 0.08
-  ```
 
 ---
 
@@ -226,12 +233,15 @@ Target Virtual Gamepad Output:
 Example `config.toml`:
 
 ```toml
+# Operating mode: "joystick" (default), "mouse", or "pedal"
+mode = "joystick"
+
 # Device matching parameters
 device_name = "Wacom"
 vendor = "056a"
 product = "0375"
 
-# Steering configuration
+# Steering configuration (Joystick mode X-Axis)
 steering_mode = "absolute"     # "absolute" or "relative"
 center = 0.5                   # Neutral center [0.0..1.0]
 half_span = 0.5                # Active width from center [> 0.0..1.0]
@@ -264,9 +274,9 @@ log_level = "info"
 # Dry run / probe mode
 dry_run = false
 
-# Minecraft camera aiming mode
-[minecraft]
-enabled = false            # Enable virtual mouse mode for Minecraft
+# Relative mouse camera aiming mode
+[mouse]
+enabled = false            # Enable virtual relative mouse mode
 style = "delta"            # "delta" (trackpad swipe) or "rate" (joystick deflection)
 sensitivity = 1.0          # Aiming sensitivity multiplier
 deadzone = 0.05            # Center resting deadzone for rate mode
@@ -309,11 +319,14 @@ Options:
       --pedal-curve <F>                        Exponential curve factor for pedals (default: 1.0)
       --pedal-invert                           Invert forward/backward pedal direction
       --lift <center|hold>                     Pen lift behavior: center or hold (default: center)
-      --minecraft                              Enable Minecraft camera aiming mode (creates virtual relative mouse)
-      --minecraft-style <delta|rate>           Minecraft aiming style: delta (trackpad swipe) or rate (joystick deflection) (default: delta)
-      --minecraft-sensitivity <F>              Aiming sensitivity multiplier for Minecraft mode (default: 1.0)
-      --minecraft-deadzone <F>                 Resting deadzone around tablet center for rate mode (default: 0.05)
-      --minecraft-invert-y                     Invert vertical pitch in Minecraft mode (moving pen up looks down)
+      --mode <joystick|mouse|pedal>            Operating mode: joystick (default), mouse, or pedal
+      --mouse                                  Shorthand to enable relative mouse camera mode (replaces --minecraft)
+      --pedal                                  Shorthand to enable dedicated pedal mode
+      --joystick                               Shorthand to enable analog joystick/gamepad mode
+      --mouse-style <delta|rate>               Relative mouse aiming style: delta (trackpad) or rate (joystick)
+      --mouse-sensitivity <F>                  Aiming sensitivity multiplier for mouse mode (default: 1.0)
+      --mouse-deadzone <F>                     Resting deadzone around tablet center for rate mode (default: 0.05)
+      --mouse-invert-y                         Invert vertical pitch in mouse mode (moving pen up looks down)
       --log-level <trace|debug|info|warn|error> Log level (default: info)
       --completions <SHELL>                    Generate shell completion script and exit [bash, zsh, fish, ...]
       --man                                    Display or export the roff man page and exit

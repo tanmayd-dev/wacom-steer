@@ -21,7 +21,11 @@ USB vendor ID in hex string format (e.g. \fI"056a"\fR) or integer (default: \fI"
 .TP
 .BI product " (string or integer)"
 USB product ID in hex string format (e.g. \fI"0375"\fR) or integer (default: \fI"0375"\fR).
-.SS Steering Configuration
+.SS Operating Mode
+.TP
+.BI mode " (string)"
+Top-level operating mode: \fI"joystick"\fR (default, analog gamepad steering & pedals), \fI"mouse"\fR (relative mouse aiming), or \fI"pedal"\fR (dedicated accelerator and brake pedals with locked steering).
+.SS Steering Configuration (Joystick Mode)
 .TP
 .BI steering_mode " (string)"
 Steering mode: \fI"absolute"\fR (default) or \fI"relative"\fR.
@@ -84,10 +88,10 @@ Logging verbosity: \fI"trace"\fR, \fI"debug"\fR, \fI"info"\fR (default), \fI"war
 .TP
 .BI dry_run " (boolean)"
 When true, runs diagnostic probe mode without creating a virtual gamepad (default: false).
-.SS Minecraft Mode ([minecraft])
+.SS Relative Mouse Mode ([mouse])
 .TP
 .BI enabled " (boolean)"
-When true, enables Minecraft camera aiming mode via a virtual relative mouse (default: false).
+When true, enables relative mouse aiming mode via a virtual relative mouse (default: false; overridden by top-level \fBmode = "mouse"\fR). Legacy table name \fB[minecraft]\fR is supported for backward compatibility.
 .TP
 .BI style " (string)"
 Aiming style: \fI"delta"\fR (trackpad swipe, default) or \fI"rate"\fR (joystick deflection).
@@ -107,6 +111,9 @@ Base camera rotation speed in counts/sec for rate mode (default: 1200.0).
 .PP
 .nf
 # ~/.config/wacom-steer/config.toml
+
+# Operating mode: "joystick", "mouse", or "pedal"
+mode = "joystick"
 
 # Device matching parameters
 device_name = "Wacom"
@@ -146,8 +153,8 @@ log_level = "info"
 # Dry run / probe mode
 dry_run = false
 
-# Minecraft camera aiming configuration
-[minecraft]
+# Relative mouse camera aiming configuration
+[mouse]
 enabled = false
 style = "delta"
 sensitivity = 1.0

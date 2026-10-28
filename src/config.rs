@@ -9,9 +9,37 @@ use std::path::PathBuf;
 
 use crate::device::parse_hex_u16;
 pub use crate::mapping::MappingConfig;
-pub use crate::minecraft::{MinecraftConfig, MinecraftStyle};
+pub use crate::mouse::{
+    MinecraftConfig, MinecraftController, MinecraftStyle, MouseConfig, MouseController, MouseStyle,
+};
 pub use crate::pedal::PedalConfig;
 pub use crate::relative::RelativeConfig;
+
+/// Operating mode of the input bridge: joystick (gamepad), mouse (relative pointer), or pedal (dedicated throttle/brake).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum OperatingMode {
+    /// Analog joystick/gamepad mode: stylus X maps to steering, Y maps to optional pedals (default).
+    #[default]
+    #[value(alias = "gamepad")]
+    Joystick,
+    /// Relative mouse mode: stylus movements generate relative mouse deltas for camera aiming and navigation.
+    #[value(alias = "minecraft")]
+    Mouse,
+    /// Dedicated pedal mode: stylus Y maps to throttle/brake pedals, steering locked to neutral.
+    #[value(alias = "pedals")]
+    Pedal,
+}
+
+impl fmt::Display for OperatingMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Joystick => write!(f, "joystick"),
+            Self::Mouse => write!(f, "mouse"),
+            Self::Pedal => write!(f, "pedal"),
+        }
+    }
+}
 
 /// Pen lift behavior when pen leaves tablet proximity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, ValueEnum)]
@@ -197,25 +225,37 @@ pub struct CliArgs {
     #[arg(long, value_name = "center|hold")]
     pub lift: Option<LiftAction>,
 
-    /// Enable Minecraft camera aiming mode (creates virtual relative mouse)
-    #[arg(long)]
-    pub minecraft: bool,
+    /// Operating mode: joystick (default), mouse, or pedal
+    #[arg(long, value_name = "joystick|mouse|pedal")]
+    pub mode: Option<OperatingMode>,
 
-    /// Minecraft aiming style: delta (trackpad swipe) or rate (joystick deflection) (default: delta)
-    #[arg(long, value_name = "delta|rate")]
-    pub minecraft_style: Option<MinecraftStyle>,
+    /// Shorthand to enable relative mouse camera mode (replaces --minecraft)
+    #[arg(long, alias = "minecraft")]
+    pub mouse: bool,
 
-    /// Aiming sensitivity multiplier for Minecraft mode (> 0.0, default: 1.0)
-    #[arg(long, value_name = "F")]
-    pub minecraft_sensitivity: Option<f64>,
+    /// Shorthand to enable dedicated pedal mode
+    #[arg(long, alias = "pedals")]
+    pub pedal: bool,
 
-    /// Resting deadzone around tablet center for Minecraft rate mode [0.0..1.0) (default: 0.05)
-    #[arg(long, value_name = "F")]
-    pub minecraft_deadzone: Option<f64>,
+    /// Shorthand to enable analog joystick/gamepad mode
+    #[arg(long, alias = "gamepad")]
+    pub joystick: bool,
 
-    /// Invert vertical pitch in Minecraft mode (moving pen up looks down)
-    #[arg(long)]
-    pub minecraft_invert_y: bool,
+    /// Relative mouse aiming style: delta (trackpad swipe) or rate (joystick deflection) (default: delta)
+    #[arg(long, value_name = "delta|rate", alias = "minecraft-style")]
+    pub mouse_style: Option<MouseStyle>,
+
+    /// Aiming sensitivity multiplier for mouse mode (> 0.0, default: 1.0)
+    #[arg(long, value_name = "F", alias = "minecraft-sensitivity")]
+    pub mouse_sensitivity: Option<f64>,
+
+    /// Resting deadzone around tablet center for mouse rate mode [0.0..1.0) (default: 0.05)
+    #[arg(long, value_name = "F", alias = "minecraft-deadzone")]
+    pub mouse_deadzone: Option<f64>,
+
+    /// Invert vertical pitch in mouse mode (moving pen up looks down)
+    #[arg(long, alias = "minecraft-invert-y")]
+    pub mouse_invert_y: bool,
 
     /// Log level: trace, debug, info, warn, error (default: info)
     #[arg(long, value_name = "trace|debug|info|warn|error")]
@@ -305,6 +345,7 @@ where
 /// Configuration as deserialized from file.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FileConfig {
+    pub mode: Option<OperatingMode>,
     pub device: Option<PathBuf>,
     pub device_name: Option<String>,
     #[serde(default, deserialize_with = "deserialize_hex_or_int")]
@@ -331,12 +372,15 @@ pub struct FileConfig {
     pub log_level: Option<LogLevel>,
     pub dry_run: Option<bool>,
     #[serde(default)]
-    pub minecraft: Option<MinecraftConfig>,
+    pub mouse: Option<MouseConfig>,
+    #[serde(default)]
+    pub minecraft: Option<MouseConfig>,
 }
 
 /// Fully resolved application configuration.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Config {
+    pub mode: OperatingMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub device: Option<PathBuf>,
     pub device_name: String,
@@ -369,13 +413,14 @@ pub struct Config {
     pub lift: LiftAction,
     pub log_level: LogLevel,
     pub dry_run: bool,
-    #[serde(default)]
-    pub minecraft: MinecraftConfig,
+    #[serde(default, alias = "minecraft")]
+    pub mouse: MouseConfig,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
+            mode: OperatingMode::Joystick,
             device: None,
             device_name: "Wacom".to_string(),
             vendor: 0x056a,
@@ -399,7 +444,7 @@ impl Default for Config {
             lift: LiftAction::Center,
             log_level: LogLevel::Info,
             dry_run: false,
-            minecraft: MinecraftConfig::default(),
+            mouse: MouseConfig::default(),
         }
     }
 }
@@ -437,19 +482,32 @@ impl Config {
         }
     }
 
+    /// Backwards compatibility accessor for [`Config::mouse`].
+    pub fn minecraft(&self) -> &MouseConfig {
+        &self.mouse
+    }
+
     /// Validates configuration parameters.
     pub fn validate(&self) -> Result<(), String> {
-        self.mapping_config().validate()?;
-        self.relative_config().validate()?;
+        match self.mode {
+            OperatingMode::Joystick => {
+                self.mapping_config().validate()?;
+                self.relative_config().validate()?;
 
-        if self.pedal_mode != PedalMode::Off {
-            self.pedal_config()
-                .validate()
-                .map_err(|e| format!("pedal_{e}"))?;
-        }
-
-        if self.minecraft.enabled {
-            self.minecraft.validate()?;
+                if self.pedal_mode != PedalMode::Off {
+                    self.pedal_config()
+                        .validate()
+                        .map_err(|e| format!("pedal_{e}"))?;
+                }
+            }
+            OperatingMode::Pedal => {
+                self.pedal_config()
+                    .validate()
+                    .map_err(|e| format!("pedal_{e}"))?;
+            }
+            OperatingMode::Mouse => {
+                self.mouse.validate()?;
+            }
         }
         Ok(())
     }
@@ -523,29 +581,52 @@ impl Config {
             file_config.dry_run.unwrap_or(defaults.dry_run)
         };
 
-        let file_minecraft = file_config.minecraft.unwrap_or_default();
-        let minecraft_enabled = if cli.minecraft {
+        let file_mouse = file_config
+            .mouse
+            .or(file_config.minecraft)
+            .unwrap_or_default();
+
+        let mode = if let Some(m) = cli.mode {
+            m
+        } else if cli.mouse {
+            OperatingMode::Mouse
+        } else if cli.pedal {
+            OperatingMode::Pedal
+        } else if cli.joystick {
+            OperatingMode::Joystick
+        } else if let Some(m) = file_config.mode {
+            m
+        } else if file_mouse.enabled {
+            OperatingMode::Mouse
+        } else {
+            defaults.mode
+        };
+
+        let mouse_enabled = mode == OperatingMode::Mouse;
+        let mouse_invert_y = if cli.mouse_invert_y {
             true
         } else {
-            file_minecraft.enabled
+            file_mouse.invert_y
         };
-        let minecraft_invert_y = if cli.minecraft_invert_y {
-            true
+        let mouse = MouseConfig {
+            enabled: mouse_enabled,
+            style: cli.mouse_style.unwrap_or(file_mouse.style),
+            sensitivity: cli.mouse_sensitivity.unwrap_or(file_mouse.sensitivity),
+            deadzone: cli.mouse_deadzone.unwrap_or(file_mouse.deadzone),
+            invert_y: mouse_invert_y,
+            rate_speed: file_mouse.rate_speed,
+        };
+
+        let pedal_mode = if let Some(pm) = cli.pedal_mode.or(file_config.pedal_mode) {
+            pm
+        } else if mode == OperatingMode::Pedal {
+            PedalMode::Split
         } else {
-            file_minecraft.invert_y
-        };
-        let minecraft = MinecraftConfig {
-            enabled: minecraft_enabled,
-            style: cli.minecraft_style.unwrap_or(file_minecraft.style),
-            sensitivity: cli
-                .minecraft_sensitivity
-                .unwrap_or(file_minecraft.sensitivity),
-            deadzone: cli.minecraft_deadzone.unwrap_or(file_minecraft.deadzone),
-            invert_y: minecraft_invert_y,
-            rate_speed: file_minecraft.rate_speed,
+            defaults.pedal_mode
         };
 
         let config = Config {
+            mode,
             device: cli.device.clone().or(file_config.device),
             device_name: cli
                 .device_name
@@ -586,10 +667,7 @@ impl Config {
                 .clone()
                 .or(file_config.recenter_button)
                 .unwrap_or(defaults.recenter_button),
-            pedal_mode: cli
-                .pedal_mode
-                .or(file_config.pedal_mode)
-                .unwrap_or(defaults.pedal_mode),
+            pedal_mode,
             pedal_center: cli
                 .pedal_center
                 .or(file_config.pedal_center)
@@ -613,7 +691,7 @@ impl Config {
                 .or(file_config.log_level)
                 .unwrap_or(defaults.log_level),
             dry_run,
-            minecraft,
+            mouse,
         };
 
         config.validate()?;
@@ -650,15 +728,15 @@ impl From<Config> for RelativeConfig {
     }
 }
 
-impl From<&Config> for MinecraftConfig {
+impl From<&Config> for MouseConfig {
     fn from(config: &Config) -> Self {
-        config.minecraft.clone()
+        config.mouse.clone()
     }
 }
 
-impl From<Config> for MinecraftConfig {
+impl From<Config> for MouseConfig {
     fn from(config: Config) -> Self {
-        config.minecraft
+        config.mouse
     }
 }
 
@@ -669,6 +747,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let default_cfg = Config::default();
+        assert_eq!(default_cfg.mode, OperatingMode::Joystick);
         assert_eq!(default_cfg.vendor, 0x056a);
         assert_eq!(default_cfg.product, 0x0375);
         assert_eq!(default_cfg.center, 0.5);
@@ -725,19 +804,23 @@ mod tests {
             pedal_curve: Some(1.2),
             pedal_invert: true,
             lift: Some(LiftAction::Center),
+            mode: Some(OperatingMode::Mouse),
+            mouse: false,
+            pedal: false,
+            joystick: false,
+            mouse_style: Some(MouseStyle::Rate),
+            mouse_sensitivity: Some(1.5),
+            mouse_deadzone: Some(0.08),
+            mouse_invert_y: true,
             log_level: None,
             dry_run: true,
-            minecraft: true,
-            minecraft_style: Some(MinecraftStyle::Rate),
-            minecraft_sensitivity: Some(1.5),
-            minecraft_deadzone: Some(0.08),
-            minecraft_invert_y: true,
             print_config: false,
             man: false,
             completions: None,
         };
 
         let resolved = Config::resolve(&cli).unwrap();
+        assert_eq!(resolved.mode, OperatingMode::Mouse);
         assert_eq!(resolved.device_name, "OverrideName");
         assert_eq!(resolved.vendor, 0x1234);
         assert_eq!(resolved.product, 0x0375);
@@ -755,11 +838,11 @@ mod tests {
         assert!(resolved.pedal_invert);
         assert_eq!(resolved.lift, LiftAction::Center);
         assert!(resolved.dry_run);
-        assert!(resolved.minecraft.enabled);
-        assert_eq!(resolved.minecraft.style, MinecraftStyle::Rate);
-        assert_eq!(resolved.minecraft.sensitivity, 1.5);
-        assert_eq!(resolved.minecraft.deadzone, 0.08);
-        assert!(resolved.minecraft.invert_y);
+        assert!(resolved.mouse.enabled);
+        assert_eq!(resolved.mouse.style, MouseStyle::Rate);
+        assert_eq!(resolved.mouse.sensitivity, 1.5);
+        assert_eq!(resolved.mouse.deadzone, 0.08);
+        assert!(resolved.mouse.invert_y);
     }
 
     #[test]
@@ -814,7 +897,98 @@ mod tests {
     }
 
     #[test]
-    fn test_minecraft_config_toml_parsing() {
+    fn test_operating_mode_selection() {
+        let mut cli = CliArgs {
+            config: None,
+            device: None,
+            device_name: None,
+            vendor: None,
+            product: None,
+            center: None,
+            half_span: None,
+            deadzone: None,
+            curve: None,
+            invert: false,
+            steering_mode: None,
+            relative_turn_rate: None,
+            relative_return_rate: None,
+            relative_deadzone: None,
+            recenter_button: None,
+            pedal_mode: None,
+            pedal_center: None,
+            pedal_half_span: None,
+            pedal_deadzone: None,
+            pedal_curve: None,
+            pedal_invert: false,
+            lift: None,
+            mode: None,
+            mouse: false,
+            pedal: false,
+            joystick: false,
+            mouse_style: None,
+            mouse_sensitivity: None,
+            mouse_deadzone: None,
+            mouse_invert_y: false,
+            log_level: None,
+            dry_run: false,
+            print_config: false,
+            man: false,
+            completions: None,
+        };
+
+        // Default mode is Joystick
+        let resolved = Config::resolve(&cli).unwrap();
+        assert_eq!(resolved.mode, OperatingMode::Joystick);
+
+        // --mouse flag activates Mouse mode
+        cli.mouse = true;
+        let resolved = Config::resolve(&cli).unwrap();
+        assert_eq!(resolved.mode, OperatingMode::Mouse);
+        assert!(resolved.mouse.enabled);
+
+        // --pedal flag activates Pedal mode and defaults pedal_mode to Split
+        cli.mouse = false;
+        cli.pedal = true;
+        let resolved = Config::resolve(&cli).unwrap();
+        assert_eq!(resolved.mode, OperatingMode::Pedal);
+        assert_eq!(resolved.pedal_mode, PedalMode::Split);
+
+        // --mode flag overrides shorthand flags
+        cli.mode = Some(OperatingMode::Joystick);
+        let resolved = Config::resolve(&cli).unwrap();
+        assert_eq!(resolved.mode, OperatingMode::Joystick);
+    }
+
+    #[test]
+    fn test_mouse_config_toml_parsing() {
+        let toml_str = r#"
+            mode = "mouse"
+            device_name = "Wacom"
+            vendor = "056a"
+            product = "0375"
+
+            [mouse]
+            enabled = true
+            style = "rate"
+            sensitivity = 1.8
+            deadzone = 0.08
+            invert_y = true
+            rate_speed = 1500.0
+        "#;
+        let file_cfg: FileConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(file_cfg.mode, Some(OperatingMode::Mouse));
+        assert!(file_cfg.mouse.is_some());
+        let mc = file_cfg.mouse.unwrap();
+        assert!(mc.enabled);
+        assert_eq!(mc.style, MouseStyle::Rate);
+        assert_eq!(mc.sensitivity, 1.8);
+        assert_eq!(mc.deadzone, 0.08);
+        assert!(mc.invert_y);
+        assert_eq!(mc.rate_speed, 1500.0);
+    }
+
+    #[test]
+    fn test_legacy_minecraft_config_toml_parsing() {
         let toml_str = r#"
             device_name = "Wacom"
             vendor = "056a"
@@ -832,7 +1006,7 @@ mod tests {
         assert!(file_cfg.minecraft.is_some());
         let mc = file_cfg.minecraft.unwrap();
         assert!(mc.enabled);
-        assert_eq!(mc.style, MinecraftStyle::Rate);
+        assert_eq!(mc.style, MouseStyle::Rate);
         assert_eq!(mc.sensitivity, 1.8);
         assert_eq!(mc.deadzone, 0.08);
         assert!(mc.invert_y);

@@ -12,48 +12,39 @@ Unlike standard stylus tools, \fBwacom-steer\fR opens source event devices in pa
 The virtual gamepad is configured as a standard Microsoft USB gamepad (Vendor ID 0x045e, Product ID 0x028e), enabling seamless recognition by Steam, Wine, Proton, and native Linux games through SDL2 and evdev.
 .SH MODES OF OPERATION
 .TP
-.B Absolute Steering Mode (Default)
-The horizontal position of the stylus on the active tablet surface maps directly to an absolute steering wheel angle:
+.B Joystick Mode (Default)
+In joystick mode (\fB\-\-mode joystick\fR), the tablet emulates an analog Xbox 360 gamepad controller:
 .RS
 .IP \(bu 2
-Stylus at center maps to neutral (0).
+Stylus X-axis maps to steering/yaw in either \fBabsolute\fR (direct 1:1 wheel angle) or \fBrelative\fR (rate-based deflection with auto-centering return spring) mode.
 .IP \(bu 2
-Stylus to the left maps to counter-clockwise / left steering.
+Stylus Y-axis maps to accelerator and brake pedals (\fB\-\-pedal\-mode split\fR or \fB\-\-pedal\-mode combined\fR).
 .IP \(bu 2
-Stylus to the right maps to clockwise / right steering.
+Stylus switches and tablet ExpressKeys map to dynamic recentering and gamepad buttons.
+.IP \(bu 2
+Operates passively without \fBEVIOCGRAB\fR, preserving normal desktop cursor tracking.
 .RE
 .TP
-.B Relative / Steering Wheel Rate Mode
-In relative mode (\fB\-\-steering\-mode relative\fR), horizontal pen deflection away from center commands a continuous turn rate (angular velocity) rather than an absolute angle:
+.B Mouse Mode
+In relative mouse mode (\fB\-\-mode mouse\fR or \fB\-\-mouse\fR), the tablet emulates a virtual relative mouse (\fIWacom Steer Virtual Mouse\fR):
 .RS
 .IP \(bu 2
-Holding the stylus deflected turns the virtual wheel progressively into a corner at a speed scaled by \fB\-\-relative\-turn\-rate\fR.
+Designed for 3D camera aiming (such as Minecraft or first-person shooters) and relative trackpad navigation.
 .IP \(bu 2
-Returning the stylus to the resting zone (\fB\-\-relative\-deadzone\fR) engages an auto-centering return torque that smoothly returns the wheel to neutral at \fB\-\-relative\-return\-rate\fR.
+Acquires exclusive device grab (\fBEVIOCGRAB\fR) so raw absolute tablet events do not leak to the compositor or XWayland, eliminating camera spinning.
+.IP \(bu 2
+Supports \fBdelta\fR style (natural trackpad swipe with baseline resets on pen lift) and \fBrate\fR style (joystick deflection rate with resting deadzone).
 .RE
 .TP
-.B Acceleration & Braking (Stylus Y-Axis Pedals)
-When enabled via \fB\-\-pedal\-mode split\fR or \fB\-\-pedal\-mode combined\fR, vertical movement on the tablet translates into vehicle pedals:
+.B Pedal Mode
+In dedicated pedal mode (\fB\-\-mode pedal\fR or \fB\-\-pedal\fR), the tablet acts exclusively as an analog throttle and brake unit:
 .RS
 .IP \(bu 2
-Pushing the stylus forward (towards top edge) applies throttle.
+Horizontal steering is locked to neutral center (0).
 .IP \(bu 2
-Pulling the stylus backward (towards bottom edge) applies brake or reverse.
+Stylus Y-axis maps directly to analog triggers (\fBABS_RZ\fR throttle, \fBABS_Z\fR brake) or combined stick axis (\fBABS_Y\fR).
 .IP \(bu 2
-A central neutral deadzone (\fB\-\-pedal\-deadzone\fR) provides a coasting band so steering does not accidentally engage pedals.
-.IP \(bu 2
-In \fBsplit\fR mode, throttle is sent to \fBABS_RZ\fR (Right Trigger, 0..32767) and brake to \fBABS_Z\fR (Left Trigger, 0..32767), while simultaneously engaging Gamepad Button 1 (A) for throttle and Button 2 (B) for brake.
-.IP \(bu 2
-In \fBcombined\fR mode, both are mapped to \fBABS_Y\fR (-32767..32767).
-.RE
-.TP
-.B Dynamic Recenter Button
-When configured with \fB\-\-recenter\-button\fR (e.g. \fIbtn_stylus\fR or an ExpressKey like \fIbtn_0\fR):
-.RS
-.IP \(bu 2
-Pressing the button while the stylus is in tablet proximity immediately sets the current stylus coordinate as the new neutral center on the fly.
-.IP \(bu 2
-Pressing the button while the stylus is lifted out of proximity restores the configured default center (0.5).
+Ideal for using the tablet alongside a physical steering wheel, flight stick, or keyboard.
 .RE
 .SH OPTIONS
 .TP
@@ -123,20 +114,29 @@ Inverts pedal direction (forward becomes brake, backward becomes throttle).
 .BI \-\-lift " center|hold"
 Pen proximity behavior when stylus leaves the tablet surface. \fBcenter\fR (default) immediately zeroes steering and pedals for safety; \fBhold\fR maintains the last active values.
 .TP
-.B \-\-minecraft
-Enables Minecraft camera aiming mode. Creates a virtual relative mouse (\fIWacom Steer Virtual Mouse\fR) via /dev/uinput and takes exclusive ownership (\fIEVIOCGRAB\fR) of the tablet device to eliminate cursor jumping and camera spinning.
+.BI \-\-mode " joystick|mouse|pedal"
+Select operating mode: \fBjoystick\fR (analog steering and optional pedals, default), \fBmouse\fR (relative mouse aiming), or \fBpedal\fR (dedicated accelerator and brake pedals with locked steering).
 .TP
-.BI \-\-minecraft\-style " delta|rate"
-Aiming style in Minecraft mode: \fBdelta\fR (trackpad swipe, default) or \fBrate\fR (joystick deflection rate).
+.B \-\-mouse
+Shorthand flag to enable relative mouse camera mode (alias: \fB\-\-minecraft\fR).
 .TP
-.BI \-\-minecraft\-sensitivity " F"
-Aiming sensitivity multiplier for Minecraft mode (> 0.0, default: 1.0).
+.B \-\-pedal
+Shorthand flag to enable dedicated pedal mode.
 .TP
-.BI \-\-minecraft\-deadzone " F"
-Resting deadzone around center for rate mode in [0.0..1.0) (default: 0.05).
+.B \-\-joystick
+Shorthand flag to enable analog joystick/gamepad mode.
 .TP
-.B \-\-minecraft\-invert\-y
-Inverts vertical pitch in Minecraft mode (moving pen up looks down).
+.BI \-\-mouse\-style " delta|rate"
+Aiming style in mouse mode: \fBdelta\fR (trackpad swipe, default) or \fBrate\fR (joystick deflection rate) (alias: \fB\-\-minecraft\-style\fR).
+.TP
+.BI \-\-mouse\-sensitivity " F"
+Aiming sensitivity multiplier for mouse mode (> 0.0, default: 1.0) (alias: \fB\-\-minecraft\-sensitivity\fR).
+.TP
+.BI \-\-mouse\-deadzone " F"
+Resting deadzone around center for mouse rate mode in [0.0..1.0) (default: 0.05) (alias: \fB\-\-minecraft\-deadzone\fR).
+.TP
+.B \-\-mouse\-invert\-y
+Inverts vertical pitch in mouse mode (moving pen up looks down) (alias: \fB\-\-minecraft\-invert\-y\fR).
 .TP
 .BI \-\-log\-level " trace|debug|info|warn|error"
 Logging verbosity level (default: info).
@@ -164,19 +164,25 @@ Displays version information.
 Default user configuration file.
 .TP
 .I /dev/uinput
-Linux userspace input subsystem character device used to create the virtual gamepad.
+Linux userspace input subsystem character device used to create virtual gamepads and mice.
 .TP
 .I /dev/input/event*
 Kernel evdev interface device nodes for tablets and stylus input.
 .SH EXAMPLES
 .TP
-Run with automatic hardware detection:
+Run in default analog joystick mode with automatic hardware detection:
 .B wacom-steer
 .TP
-Run diagnostic probe to inspect connected devices without creating a virtual gamepad:
+Run diagnostic probe to inspect connected devices without creating virtual devices:
 .B wacom-steer \-\-dry\-run
 .TP
-Enable dual-trigger pedals on stylus vertical axis with 8% deadzone:
+Run in relative mouse mode for 3D camera aiming (e.g. Minecraft):
+.B wacom-steer \-\-mouse
+.TP
+Run in dedicated pedal mode (throttle and brake on stylus Y-axis, steering centered):
+.B wacom-steer \-\-pedal
+.TP
+Enable dual-trigger pedals on stylus vertical axis with 8% deadzone in joystick mode:
 .B wacom-steer \-\-pedal\-mode split \-\-pedal\-deadzone 0.08
 .TP
 Enable relative steering mode with dynamic recentering on the lower stylus barrel switch:

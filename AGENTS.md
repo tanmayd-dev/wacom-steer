@@ -15,7 +15,7 @@ The crate is organized into clean, single-responsibility modules:
   - Maps to virtual gamepad axis range $[-32767, 32767]$.
   - Fully covered by unit and integration tests.
 
-- **`src/minecraft.rs`**: Minecraft camera aiming and relative mouse control module.
+- **`src/mouse.rs`**: Relative mouse control module for 3D camera aiming and pointer navigation.
   - Translates tablet coordinates into relative mouse motion (`REL_X`, `REL_Y`).
   - Supports `Delta` mode (trackpad swipe with sub-pixel accumulation and proximity-lift baseline reset).
   - Supports `Rate` mode (joystick deflection rate with resting deadzone and periodic timer ticks).
@@ -50,7 +50,7 @@ The crate is organized into clean, single-responsibility modules:
 ## Critical Invariants & Constraints
 
 1. **Passive Reading by Default (`No EVIOCGRAB` for Gamepad Steering)**:
-   In standard steering / racing mode, under no circumstances should `EVIOCGRAB` be issued on the source Wacom device; the pen must continue to control the host desktop cursor normally. In `--minecraft` mode, `EVIOCGRAB` is intentionally acquired so that absolute tablet coordinates do not leak to the compositor / XWayland and cause camera spinning. Grab is cleanly released on exit.
+   In standard joystick / steering and pedal modes, under no circumstances should `EVIOCGRAB` be issued on the source Wacom device; the pen must continue to control the host desktop cursor normally. In `--mode mouse` (or `--mouse`) mode, `EVIOCGRAB` is intentionally acquired so that absolute tablet coordinates do not leak to the compositor / XWayland and cause camera spinning. Grab is cleanly released on exit.
 
 2. **No Real `/dev/uinput` in Ordinary Tests**:
    Unit and integration tests must never touch `/dev/uinput`. All testing of output behaviour must utilize `MockGamepad` or pure function interfaces.
